@@ -85,6 +85,18 @@ impl Move {
         self.0 >> 12
     }
 
+    /// The raw 16-bit encoding (for serialization, e.g. into a hash table).
+    #[inline]
+    pub const fn to_bits(self) -> u16 {
+        self.0
+    }
+
+    /// Reconstruct a move from its raw 16-bit encoding.
+    #[inline]
+    pub const fn from_bits(bits: u16) -> Move {
+        Move(bits)
+    }
+
     /// True if this move captures (including en passant and promotion captures).
     #[inline]
     pub const fn is_capture(self) -> bool {
@@ -205,6 +217,12 @@ impl MoveList {
     #[inline]
     pub fn as_slice(&self) -> &[Move] {
         &self.moves[..self.len]
+    }
+
+    /// The moves as a mutable slice (used for in-place move ordering).
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [Move] {
+        &mut self.moves[..self.len]
     }
 }
 
