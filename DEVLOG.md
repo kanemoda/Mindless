@@ -5,6 +5,99 @@ the results. Newest milestone first.
 
 ---
 
+## Milestone 2 — Baseline search + evaluation (2026-05-29)
+
+### Goal
+
+Turn the rule-following random-move player from Milestone 1 into one that
+actually *plays* chess: looks ahead, judges who is better, manages its clock, and
+explains its thinking — all correctly, and at a strength we can measure. The
+deliberate scope limit: build a **clean, correct baseline**, and leave the
+clever speed-up tricks (and the neural-network evaluation) for later milestones,
+so each can be added and proven to help rather than piled on untested.
+
+### What was done, and why
+
+1. **Added a position evaluator.** The engine now scores a position by material
+   plus where the pieces stand, blending between opening and endgame values as
+   the board empties (a "tapered" evaluation), using a well-known expert-tuned
+   set of tables. Crucially, the evaluation sits behind a swap-in interface so a
+   future neural network can replace it without touching the search — a planned
+   requirement.
+
+2. **Built the search.** Negamax with alpha-beta: the engine looks ahead and
+   prunes lines it has already proven are not worth examining. It deepens
+   iteratively (one ply, then two, ...) so it always has a ready answer when the
+   clock demands one, and it reports the full best line it foresees.
+
+3. **Added quiescence search.** At the end of the look-ahead it keeps following
+   captures until the position is calm, so it never judges a position in the
+   middle of an exchange (the "horizon effect").
+
+4. **Added a transposition table.** A large, size-configurable memory of already
+   analysed positions, so repeated positions (reached by different move orders)
+   are not re-analysed. Mate scores are stored carefully so "mate in N" stays
+   correct no matter where in the tree it is found.
+
+5. **Ordered moves well.** The engine tries the most promising moves first (the
+   move that worked before, valuable captures, recently-good quiet moves). This
+   is the single biggest factor in how deep it can see in the available time.
+
+6. **Handled draws correctly.** Threefold repetition, the fifty-move rule, and
+   insufficient material are all recognised and scored as draws.
+
+7. **Added time management.** It budgets time from the clock with a soft target
+   and a hard ceiling, always keeping a safety margin so it never loses on time,
+   and it honours every standard time/depth/node instruction a chess program can
+   send.
+
+8. **Wired it into the UCI conversation** with live "thinking" output and the
+   standard `Hash` (memory size) and `Clear Hash` options, on a background thread
+   so the engine stays responsive (it can be told to stop mid-think).
+
+9. **Tested and sanity-checked.** New automated tests confirm it finds forced
+   mates, wins free material, recognises stalemate, and obeys time/node limits;
+   the existing rule-correctness tests still pass. Two full engine-vs-itself
+   games were played to confirm coherent, legal, crash-free play.
+
+### Results
+
+- **Plays real, coherent chess.** In self-play it opens sensibly (develops
+  pieces, castles), conducts middlegames, and reaches natural endings. Two
+  sanity games: one ended decisively (checkmate/stalemate) after 173 half-moves,
+  the other was drawn by repetition — no crashes, responsive throughout.
+- **Solves tactics.** On a standard tactical test position it instantly finds
+  the winning move and announces a forced mate in two.
+- **Searches to a useful depth.** From the start position it reaches about depth
+  9 in five seconds on the development machine (this baseline omits the
+  deeper-searching shortcuts coming in Milestone 3).
+- **Respects the clock** and never oversteps its time budget.
+- **Quality checks clean:** optimized build, linter (`clippy`), and formatter all
+  pass with no warnings; the full automated test suite is green; move generation
+  remains perft-exact.
+
+### Key decisions, in brief
+
+- **Evaluation behind a swap-in interface** so NNUE can replace it later with no
+  search changes.
+- **A clean, correct baseline on purpose** — no aggressive pruning yet, so that
+  Milestone 3 can add those one at a time and *measure* each with automated
+  self-play (SPRT) testing.
+- **Search on its own thread** so the engine stays responsive to "stop" and can
+  think indefinitely when asked.
+- **Reused Milestone 1's foundation directly** — the fast move-maker, the
+  position fingerprints, and the perft-verified move generator all carried over
+  unchanged, which is exactly what they were designed for.
+
+### What's next
+
+- **Milestone 3:** the deeper-searching shortcuts (null-move, late-move
+  reductions, futility and capture pruning), each added and validated by
+  automated self-play testing (SPRT) so we only keep changes that measurably win
+  more games. Further out: the NNUE neural-network evaluation.
+
+---
+
 ## Milestone 1 — Foundation (2026-05-29)
 
 ### Goal
