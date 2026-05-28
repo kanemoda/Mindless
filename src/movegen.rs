@@ -32,6 +32,20 @@ const BLACK_QS_PATH: Bitboard = Bitboard(0x0C00_0000_0000_0000); // c8, d8
 
 /// Generate all legal moves for the side to move into `list`.
 pub fn generate_legal(board: &Board, list: &mut MoveList) {
+    generate(board, list, true);
+}
+
+/// Generate only "noisy" legal moves — captures, en passant and promotions —
+/// for quiescence search. Quiet moves (plain pushes, double pushes, castling
+/// and quiet piece moves) are omitted.
+pub fn generate_noisy(board: &Board, list: &mut MoveList) {
+    generate(board, list, false);
+}
+
+/// Core legal-move generator. When `quiets` is true it produces every legal
+/// move (the perft-verified behaviour); when false it produces only captures,
+/// en passant and promotions.
+fn generate(board: &Board, list: &mut MoveList, quiets: bool) {
     let us = board.side_to_move();
     let them = us.flip();
     let occ = board.occupied();
@@ -45,7 +59,7 @@ pub fn generate_legal(board: &Board, list: &mut MoveList) {
 
     // King moves: onto neither our own pieces nor attacked squares.
     let king_targets = KING_ATTACKS[king_sq.index()] & !us_bb & !enemy_attacks;
-    add_piece_moves(king_sq, king_targets, them_bb, list);
+    add_piece_moves(king_sq, king_targets, them_bb, quiets, list);
 
     let checkers = board.attackers_to(king_sq, occ) & them_bb;
     let num_checkers = checkers.count();
@@ -66,19 +80,19 @@ pub fn generate_legal(board: &Board, list: &mut MoveList) {
 
     let pinned = compute_pinned(board, us, them, king_sq, occ);
 
-    // Castling is only possible when not in check.
-    if num_checkers == 0 {
+    // Castling is a quiet move and only possible when not in check.
+    if quiets && num_checkers == 0 {
         generate_castling(board, us, occ, enemy_attacks, list);
     }
 
     generate_pawn_moves(
-        board, us, them, occ, them_bb, check_mask, pinned, king_sq, list,
+        board, us, them, occ, them_bb, check_mask, pinned, king_sq, quiets, list,
     );
 
     // Knights: a pinned knight has no legal moves (it cannot stay on the ray).
     for from in board.pieces_colored(us, PieceType::Knight) & !pinned {
         let targets = KNIGHT_ATTACKS[from.index()] & !us_bb & check_mask;
-        add_piece_moves(from, targets, them_bb, list);
+        add_piece_moves(from, targets, them_bb, quiets, list);
     }
 
     // Bishops and queens — diagonal rays.
@@ -89,7 +103,7 @@ pub fn generate_legal(board: &Board, list: &mut MoveList) {
         if pinned.contains(from) {
             targets &= LINE[king_sq.index()][from.index()];
         }
-        add_piece_moves(from, targets, them_bb, list);
+        add_piece_moves(from, targets, them_bb, quiets, list);
     }
 
     // Rooks and queens — orthogonal rays.
@@ -100,25 +114,34 @@ pub fn generate_legal(board: &Board, list: &mut MoveList) {
         if pinned.contains(from) {
             targets &= LINE[king_sq.index()][from.index()];
         }
-        add_piece_moves(from, targets, them_bb, list);
+        add_piece_moves(from, targets, them_bb, quiets, list);
     }
 }
 
-/// Convenience wrapper returning a fresh [`MoveList`].
+/// Convenience wrapper returning a fresh [`MoveList`] of all legal moves.
 pub fn legal_moves(board: &Board) -> MoveList {
     let mut list = MoveList::new();
     generate_legal(board, &mut list);
     list
 }
 
-/// Emit quiet and capture moves for a single non-pawn piece given its target set.
+/// Emit moves for a single non-pawn piece. Captures are always emitted; quiet
+/// (non-capturing) moves only when `quiets` is true.
 #[inline]
-fn add_piece_moves(from: Square, targets: Bitboard, them_bb: Bitboard, list: &mut MoveList) {
+fn add_piece_moves(
+    from: Square,
+    targets: Bitboard,
+    them_bb: Bitboard,
+    quiets: bool,
+    list: &mut MoveList,
+) {
     for to in targets & them_bb {
         list.push(Move::new(from, to, flag::CAPTURE));
     }
-    for to in targets & !them_bb {
-        list.push(Move::new(from, to, flag::QUIET));
+    if quiets {
+        for to in targets & !them_bb {
+            list.push(Move::new(from, to, flag::QUIET));
+        }
     }
 }
 
@@ -235,6 +258,7 @@ fn generate_pawn_moves(
     check_mask: Bitboard,
     pinned: Bitboard,
     king_sq: Square,
+    quiets: bool,
     list: &mut MoveList,
 ) {
     let empty = !occ;
@@ -248,6 +272,7 @@ fn generate_pawn_moves(
         empty,
         them_bb,
         check_mask,
+        quiets,
         list,
     );
 
@@ -261,6 +286,7 @@ fn generate_pawn_moves(
             empty,
             them_bb,
             check_mask,
+            quiets,
             list,
         );
     }
@@ -272,6 +298,7 @@ fn generate_pawn_moves(
 
 /// Generate pushes and diagonal captures (with promotions) for a set of pawns,
 /// restricting destinations to `ray` (used for pin masking) and `check_mask`.
+/// Captures and promotions are always emitted; quiet pushes only when `quiets`.
 #[allow(clippy::too_many_arguments)]
 fn add_pawn_moves(
     pawns: Bitboard,
@@ -280,15 +307,18 @@ fn add_pawn_moves(
     empty: Bitboard,
     them_bb: Bitboard,
     check_mask: Bitboard,
+    quiets: bool,
     list: &mut MoveList,
 ) {
     match us {
         Color::White => {
             let single = pawns.north() & empty;
-            let double = (single & Bitboard::RANK_3).north() & empty & check_mask & ray;
-            let single = single & check_mask & ray;
-            emit_pushes(single, Bitboard::RANK_8, 8, list);
-            emit_doubles(double, 16, list);
+            let single_t = single & check_mask & ray;
+            emit_pushes(single_t, Bitboard::RANK_8, 8, quiets, list);
+            if quiets {
+                let double = (single & Bitboard::RANK_3).north() & empty & check_mask & ray;
+                emit_doubles(double, 16, list);
+            }
 
             let left = pawns.north_west() & them_bb & check_mask & ray;
             let right = pawns.north_east() & them_bb & check_mask & ray;
@@ -297,10 +327,12 @@ fn add_pawn_moves(
         }
         Color::Black => {
             let single = pawns.south() & empty;
-            let double = (single & Bitboard::RANK_6).south() & empty & check_mask & ray;
-            let single = single & check_mask & ray;
-            emit_pushes(single, Bitboard::RANK_1, -8, list);
-            emit_doubles(double, -16, list);
+            let single_t = single & check_mask & ray;
+            emit_pushes(single_t, Bitboard::RANK_1, -8, quiets, list);
+            if quiets {
+                let double = (single & Bitboard::RANK_6).south() & empty & check_mask & ray;
+                emit_doubles(double, -16, list);
+            }
 
             let left = pawns.south_west() & them_bb & check_mask & ray;
             let right = pawns.south_east() & them_bb & check_mask & ray;
@@ -315,10 +347,19 @@ fn origin(to: Square, delta: i32) -> Square {
     Square::new((to.index() as i32 - delta) as u8)
 }
 
-/// Emit single pushes; targets on the promotion rank fan out to four promotions.
-fn emit_pushes(targets: Bitboard, promo_rank: Bitboard, delta: i32, list: &mut MoveList) {
-    for to in targets & !promo_rank {
-        list.push(Move::new(origin(to, delta), to, flag::QUIET));
+/// Emit single pushes. Promotions (on the last rank) are always emitted; plain
+/// quiet pushes only when `quiets` is true.
+fn emit_pushes(
+    targets: Bitboard,
+    promo_rank: Bitboard,
+    delta: i32,
+    quiets: bool,
+    list: &mut MoveList,
+) {
+    if quiets {
+        for to in targets & !promo_rank {
+            list.push(Move::new(origin(to, delta), to, flag::QUIET));
+        }
     }
     for to in targets & promo_rank {
         emit_promotions(origin(to, delta), to, false, list);
