@@ -1,0 +1,29 @@
+[package]
+name = "mindless"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Mindless — a UCI chess engine and move-generation library written in Rust."
+authors = ["kanemoda"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/kanemoda/Mindless"
+keywords = ["chess", "uci", "engine", "bitboard", "perft"]
+categories = ["games", "command-line-utilities"]
+
+# The library exposes the engine core so other Rust projects can depend on it.
+[lib]
+name = "mindless"
+path = "src/lib.rs"
+
+# The binary is the UCI engine executable.
+[[bin]]
+name = "mindless"
+path = "src/main.rs"
+
+# Release profile tuned for the search hot path: full LTO and a single codegen
+# unit trade longer build times for maximum runtime throughput.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
