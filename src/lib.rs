@@ -37,10 +37,13 @@
 pub mod attacks;
 pub mod bitboard;
 pub mod board;
+pub mod eval;
 pub mod magic;
 pub mod movegen;
 pub mod moves;
 pub mod perft;
+pub mod search;
+pub mod tt;
 pub mod types;
 pub mod uci;
 pub mod zobrist;
@@ -49,6 +52,9 @@ pub mod zobrist;
 // their module path (`mindless::perft::perft`) to avoid shadowing the module.
 pub use bitboard::Bitboard;
 pub use board::{Board, FenError, STARTPOS_FEN};
-pub use movegen::{generate_legal, legal_moves};
+pub use eval::{Evaluator, HandCrafted};
+pub use movegen::{generate_legal, generate_noisy, legal_moves};
 pub use moves::{Move, MoveList};
+pub use search::{think, SearchLimits};
+pub use tt::Tt;
 pub use types::{CastlingRights, Color, Piece, PieceType, Square};
