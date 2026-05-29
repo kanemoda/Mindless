@@ -18,7 +18,7 @@ use crate::moves::{Move, MoveList};
 use crate::tt::{Bound, Tt};
 use crate::types::{Color, PieceType};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 /// Maximum search ply (bounds recursion and the PV / killer tables).
@@ -60,6 +60,16 @@ const NMP_MIN_DEPTH: i32 = 3;
 /// Null-move reduction is `NMP_BASE + depth / NMP_DIV`.
 const NMP_BASE: i32 = 3;
 const NMP_DIV: i32 = 3;
+
+// Late move reductions.
+/// Minimum remaining depth at which late moves may be reduced.
+const LMR_MIN_DEPTH: i32 = 3;
+/// Reduce only the moves tried after this many at a node (so moves 1..=3 are
+/// searched at full depth).
+const LMR_MIN_MOVE_COUNT: i32 = 3;
+/// Reduction table parameters: `r = LMR_BASE + ln(depth) * ln(move) / LMR_DIVISOR`.
+const LMR_BASE: f64 = 0.75;
+const LMR_DIVISOR: f64 = 2.25;
 
 // Move-ordering score tiers.
 const TT_SCORE: i32 = 2_000_000;
@@ -113,6 +123,27 @@ fn score_from_tt(score: i32, ply: usize) -> i32 {
     } else {
         score
     }
+}
+
+/// Depth reduction for a late, quiet move, read from a precomputed
+/// `ln(depth) * ln(move_count)` table: deeper searches and later moves reduce
+/// more. The table is built once on first use.
+fn lmr_reduction(depth: i32, move_count: i32) -> i32 {
+    static TABLE: OnceLock<[[i32; 64]; 64]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [[0i32; 64]; 64];
+        // Skip index 0 in both dimensions to avoid ln(0); those entries are
+        // never read (reductions only apply at depth >= 3, move >= 4).
+        for (d, row) in t.iter_mut().enumerate().skip(1) {
+            for (m, slot) in row.iter_mut().enumerate().skip(1) {
+                *slot = (LMR_BASE + (d as f64).ln() * (m as f64).ln() / LMR_DIVISOR) as i32;
+            }
+        }
+        t
+    });
+    let d = depth.clamp(0, 63) as usize;
+    let m = move_count.clamp(0, 63) as usize;
+    table[d][m]
 }
 
 /// Per-search state for one search thread.
@@ -466,21 +497,52 @@ impl<E: Evaluator> Searcher<E> {
         let mut move_count = 0;
 
         for &mv in moves.as_slice() {
+            let is_quiet = !mv.is_capture() && !mv.is_promotion();
             let undo = board.make_move(mv);
             self.keys.push(board.zobrist_key());
             move_count += 1;
 
-            // Principal-variation search: full window for the first move, a
-            // null window probe for the rest (re-searched if it beats alpha).
+            // Principal-variation search with late-move reductions. The first
+            // move gets a full-window search; the rest get a null-window probe.
+            // Late, quiet, non-checking, non-killer moves are probed at a reduced
+            // depth and only re-searched at full depth if that probe beats alpha.
             let score = if move_count == 1 {
                 -self.negamax(board, -beta, -alpha, depth - 1, ply + 1, true)
             } else {
-                let probe = -self.negamax(board, -alpha - 1, -alpha, depth - 1, ply + 1, true);
-                if probe > alpha && probe < beta {
-                    -self.negamax(board, -beta, -alpha, depth - 1, ply + 1, true)
-                } else {
-                    probe
+                let mut reduction = 0;
+                if is_quiet
+                    && !in_check
+                    && depth >= LMR_MIN_DEPTH
+                    && move_count > LMR_MIN_MOVE_COUNT
+                    && mv != self.killers[ply][0]
+                    && mv != self.killers[ply][1]
+                    && !board.in_check()
+                {
+                    reduction = lmr_reduction(depth, move_count);
+                    if is_pv {
+                        reduction -= 1;
+                    }
+                    reduction = reduction.clamp(0, depth - 2);
                 }
+
+                // Reduced null-window probe (reduction 0 ⇒ ordinary PVS probe).
+                let mut s = -self.negamax(
+                    board,
+                    -alpha - 1,
+                    -alpha,
+                    depth - 1 - reduction,
+                    ply + 1,
+                    true,
+                );
+                // A reduced probe that beats alpha is re-tried at full depth.
+                if reduction > 0 && s > alpha {
+                    s = -self.negamax(board, -alpha - 1, -alpha, depth - 1, ply + 1, true);
+                }
+                // A move that lands inside the window is a new PV: re-search wide.
+                if s > alpha && s < beta {
+                    s = -self.negamax(board, -beta, -alpha, depth - 1, ply + 1, true);
+                }
+                s
             };
 
             self.keys.pop();
