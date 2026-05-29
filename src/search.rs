@@ -109,6 +109,19 @@ const HIST_LMR_DIV: i32 = 8_192;
 /// Most quiet moves remembered per node for the history penalty ("malus").
 const MAX_QUIETS: usize = 64;
 
+// Late move pruning (move-count pruning) and history pruning of quiet moves: at
+// low depth in non-PV nodes, once enough moves have been tried the remaining
+// quiets are skipped, and quiets with poor history are skipped near the leaves.
+/// Deepest remaining depth at which late-move pruning applies.
+const LMP_MAX_DEPTH: i32 = 8;
+/// Late-move-pruning count: after `LMP_BASE + depth * depth` moves, skip quiets.
+const LMP_BASE: i32 = 3;
+/// Deepest remaining depth at which quiet history pruning applies.
+const HP_MAX_DEPTH: i32 = 4;
+/// A quiet move is history-pruned when its combined history is below
+/// `-HP_MARGIN * depth`.
+const HP_MARGIN: i32 = 2_000;
+
 /// The limits requested by a `go` command.
 #[derive(Clone, Default)]
 pub struct SearchLimits {
@@ -599,24 +612,45 @@ impl<E: Evaluator> Searcher<E> {
         for &mv in moves.as_slice() {
             let is_quiet = !mv.is_capture() && !mv.is_promotion();
 
-            // SEE move-loop pruning. Skipped while in check, at PV nodes, at high
-            // depth, and until a non-losing best score exists — so the first
-            // (best-ordered) move is always searched and we never prune while
-            // being mated. Pruned moves are not made, saving the whole subtree.
-            if !is_pv && !in_check && depth <= SEE_PRUNE_MAX_DEPTH && best > -MATE_IN_MAX {
-                let threshold = if is_quiet {
-                    -SEE_QUIET_MARGIN * depth
-                } else {
-                    -SEE_CAPTURE_MARGIN * depth * depth
-                };
-                if !see_ge(board, mv, threshold) {
+            // The moving piece (read before the move, while it is still on
+            // `from`) keys this move in the continuation-history tables; the
+            // combined history is computed once and reused for pruning and LMR.
+            let piece_idx = board.piece_on(mv.from()).map_or(0, |p| p.index());
+            let hist = if is_quiet {
+                self.quiet_history(mv.from().index(), mv.to().index(), piece_idx, cont0, cont1)
+            } else {
+                0
+            };
+
+            // Move-loop pruning, at non-PV nodes that are not in check and once a
+            // non-losing best score exists — so the first (best-ordered) move is
+            // always searched and we never prune while being mated. Pruned moves
+            // are not made, saving the whole subtree.
+            if !is_pv && !in_check && best > -MATE_IN_MAX {
+                // Late move pruning: after a depth-dependent move count, skip the
+                // remaining quiet moves entirely.
+                if is_quiet && depth <= LMP_MAX_DEPTH && move_count >= LMP_BASE + depth * depth {
                     continue;
+                }
+                // History pruning: near the leaves, skip quiet moves whose
+                // combined history is poor.
+                if is_quiet && depth <= HP_MAX_DEPTH && hist < -HP_MARGIN * depth {
+                    continue;
+                }
+                // SEE pruning: skip moves that lose too much material. Captures
+                // use a steeper quadratic margin, quiets a linear one.
+                if depth <= SEE_PRUNE_MAX_DEPTH {
+                    let threshold = if is_quiet {
+                        -SEE_QUIET_MARGIN * depth
+                    } else {
+                        -SEE_CAPTURE_MARGIN * depth * depth
+                    };
+                    if !see_ge(board, mv, threshold) {
+                        continue;
+                    }
                 }
             }
 
-            // The moving piece (read before the move, while it is still on
-            // `from`) keys this move in the continuation-history tables.
-            let piece_idx = board.piece_on(mv.from()).map_or(0, |p| p.index());
             if is_quiet && n_quiets < quiets_tried.len() {
                 quiets_tried[n_quiets] = mv;
                 n_quiets += 1;
@@ -648,15 +682,8 @@ impl<E: Evaluator> Searcher<E> {
                         reduction -= 1;
                     }
                     // Reduce less for moves with good combined history, more for
-                    // moves with bad history.
-                    let h = self.quiet_history(
-                        mv.from().index(),
-                        mv.to().index(),
-                        piece_idx,
-                        cont0,
-                        cont1,
-                    );
-                    reduction -= (h / HIST_LMR_DIV).clamp(-2, 2);
+                    // moves with bad history (reusing the value computed above).
+                    reduction -= (hist / HIST_LMR_DIV).clamp(-2, 2);
                     reduction = reduction.clamp(0, depth - 2);
                 }
 
