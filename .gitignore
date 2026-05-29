@@ -1,0 +1,8 @@
+# Rust build artifacts (rebuilt locally with `cargo build`)
+/target
+
+# Match runner built from source per TESTING.md; not stored in the repo
+/tools/bin/fastchess
+
+# fastchess tournament auto-save written to the repo root during a match
+/config.json
