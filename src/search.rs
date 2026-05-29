@@ -15,6 +15,7 @@ use crate::board::Board;
 use crate::eval::{Evaluator, HandCrafted, PIECE_VALUE};
 use crate::movegen::{generate_legal, generate_noisy, legal_moves};
 use crate::moves::{Move, MoveList};
+use crate::see::see_ge;
 use crate::tt::{Bound, Tt};
 use crate::types::{Color, PieceType};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -71,12 +72,18 @@ const LMR_MIN_MOVE_COUNT: i32 = 3;
 const LMR_BASE: f64 = 0.75;
 const LMR_DIVISOR: f64 = 2.25;
 
-// Move-ordering score tiers.
+// Move-ordering score tiers. Winning/equal captures (SEE >= 0) rank just below
+// the TT move; killers and history-ranked quiets follow; losing captures
+// (SEE < 0) are demoted below every quiet so they are tried last.
 const TT_SCORE: i32 = 2_000_000;
 const CAPTURE_BASE: i32 = 1_000_000;
 const KILLER0_SCORE: i32 = 900_000;
 const KILLER1_SCORE: i32 = 800_000;
 const HISTORY_CAP: i32 = 700_000;
+const BAD_CAPTURE_BASE: i32 = -1_000_000;
+
+/// Upper bound on legal moves in any position; sizes the ordering scratch array.
+const MAX_MOVES: usize = 256;
 
 /// The limits requested by a `go` command.
 #[derive(Clone, Default)]
@@ -489,7 +496,7 @@ impl<E: Evaluator> Searcher<E> {
         if moves.is_empty() {
             return if in_check { -MATE + ply as i32 } else { DRAW };
         }
-        self.order_moves(board, &mut moves, tt_move, ply);
+        self.order_moves(board, &mut moves, tt_move, ply, true);
 
         let original_alpha = alpha;
         let mut best = -INF;
@@ -625,7 +632,7 @@ impl<E: Evaluator> Searcher<E> {
             if moves.is_empty() {
                 return -MATE + ply as i32; // checkmate
             }
-            self.order_moves(board, &mut moves, Move::NULL, ply);
+            self.order_moves(board, &mut moves, Move::NULL, ply, false);
         } else {
             stand = self.eval.evaluate(board);
             if stand >= beta {
@@ -636,14 +643,19 @@ impl<E: Evaluator> Searcher<E> {
             }
             best = stand;
             generate_noisy(board, &mut moves);
-            self.order_moves(board, &mut moves, Move::NULL, ply);
+            self.order_moves(board, &mut moves, Move::NULL, ply, false);
         }
 
         for &mv in moves.as_slice() {
-            // Delta pruning: skip captures that cannot plausibly reach alpha.
             if !in_check {
+                // Delta pruning: skip captures that cannot plausibly reach alpha.
                 let gain = Self::move_gain(board, mv);
                 if stand + gain + DELTA_MARGIN < alpha {
+                    continue;
+                }
+                // SEE pruning: skip plain captures that lose material outright.
+                // Promotions are always tried (rare and forcing).
+                if mv.is_capture() && !mv.is_promotion() && !see_ge(board, mv, 0) {
                     continue;
                 }
             }
@@ -686,17 +698,42 @@ impl<E: Evaluator> Searcher<E> {
         gain
     }
 
-    /// Order moves in place: TT move, then captures (MVV-LVA), then killers,
-    /// then quiets by history.
-    fn order_moves(&self, board: &Board, moves: &mut MoveList, tt_move: Move, ply: usize) {
+    /// Order moves in place, best first: TT move, then winning/equal captures
+    /// (MVV-LVA), then killers, then quiets by history, then losing captures.
+    ///
+    /// Each move is scored exactly once into a scratch array before sorting, so
+    /// the (relatively expensive) SEE split is computed once per move rather than
+    /// once per comparison. When `use_see` is false the capture split is skipped
+    /// and every capture is ranked by plain MVV-LVA — used by quiescence, which
+    /// prunes losing captures directly and so never needs them demoted.
+    fn order_moves(
+        &self,
+        board: &Board,
+        moves: &mut MoveList,
+        tt_move: Move,
+        ply: usize,
+        use_see: bool,
+    ) {
         let killers = self.killers[ply];
-        moves.as_mut_slice().sort_unstable_by(|&a, &b| {
-            self.score_move(board, b, tt_move, killers)
-                .cmp(&self.score_move(board, a, tt_move, killers))
-        });
+        let n = moves.len();
+        let mut scored = [(0i32, Move::NULL); MAX_MOVES];
+        for (slot, &mv) in scored[..n].iter_mut().zip(moves.as_slice()) {
+            *slot = (self.score_move(board, mv, tt_move, killers, use_see), mv);
+        }
+        scored[..n].sort_unstable_by_key(|&(score, _)| std::cmp::Reverse(score));
+        for (dst, src) in moves.as_mut_slice().iter_mut().zip(&scored[..n]) {
+            *dst = src.1;
+        }
     }
 
-    fn score_move(&self, board: &Board, mv: Move, tt_move: Move, killers: [Move; 2]) -> i32 {
+    fn score_move(
+        &self,
+        board: &Board,
+        mv: Move,
+        tt_move: Move,
+        killers: [Move; 2],
+        use_see: bool,
+    ) -> i32 {
         if mv == tt_move {
             return TT_SCORE;
         }
@@ -713,7 +750,14 @@ impl<E: Evaluator> Searcher<E> {
                 .map_or(0, |p| p.piece_type().index() as i32);
             let promo = mv.promotion().map_or(0, |pt| PIECE_VALUE[pt.index()]);
             // Most-valuable-victim, least-valuable-attacker, plus promotion gain.
-            return CAPTURE_BASE + victim * 16 - attacker + promo;
+            let mvv_lva = victim * 16 - attacker + promo;
+            // Demote captures that lose material (negative SEE) below all quiets.
+            let base = if use_see && !see_ge(board, mv, 0) {
+                BAD_CAPTURE_BASE
+            } else {
+                CAPTURE_BASE
+            };
+            return base + mvv_lva;
         }
         if mv == killers[0] {
             return KILLER0_SCORE;
