@@ -62,6 +62,19 @@ const NMP_MIN_DEPTH: i32 = 3;
 const NMP_BASE: i32 = 3;
 const NMP_DIV: i32 = 3;
 
+// SEE-based move-loop pruning: at low remaining depth in non-PV nodes, once a
+// non-losing best score exists, skip moves that static exchange evaluation says
+// lose too much material. Captures use a steeper, quadratic depth margin; quiet
+// moves a gentler linear one.
+/// Deepest remaining depth at which SEE move pruning is attempted.
+const SEE_PRUNE_MAX_DEPTH: i32 = 8;
+/// Capture SEE-pruning margin: a capture is pruned when its SEE is below
+/// `-SEE_CAPTURE_MARGIN * depth * depth`.
+const SEE_CAPTURE_MARGIN: i32 = 20;
+/// Quiet SEE-pruning margin: a quiet move is pruned when its SEE is below
+/// `-SEE_QUIET_MARGIN * depth`.
+const SEE_QUIET_MARGIN: i32 = 65;
+
 // Late move reductions.
 /// Minimum remaining depth at which late moves may be reduced.
 const LMR_MIN_DEPTH: i32 = 3;
@@ -505,6 +518,22 @@ impl<E: Evaluator> Searcher<E> {
 
         for &mv in moves.as_slice() {
             let is_quiet = !mv.is_capture() && !mv.is_promotion();
+
+            // SEE move-loop pruning. Skipped while in check, at PV nodes, at high
+            // depth, and until a non-losing best score exists — so the first
+            // (best-ordered) move is always searched and we never prune while
+            // being mated. Pruned moves are not made, saving the whole subtree.
+            if !is_pv && !in_check && depth <= SEE_PRUNE_MAX_DEPTH && best > -MATE_IN_MAX {
+                let threshold = if is_quiet {
+                    -SEE_QUIET_MARGIN * depth
+                } else {
+                    -SEE_CAPTURE_MARGIN * depth * depth
+                };
+                if !see_ge(board, mv, threshold) {
+                    continue;
+                }
+            }
+
             let undo = board.make_move(mv);
             self.keys.push(board.zobrist_key());
             move_count += 1;
