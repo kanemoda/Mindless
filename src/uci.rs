@@ -123,6 +123,7 @@ fn print_id() {
     println!("id name {ENGINE_NAME}");
     println!("id author {ENGINE_AUTHOR}");
     println!("option name Hash type spin default {DEFAULT_HASH_MB} min 1 max {MAX_HASH_MB}");
+    println!("option name Threads type spin default 1 min 1 max 1");
     println!("option name Clear Hash type button");
     println!("uciok");
 }
@@ -157,6 +158,8 @@ fn handle_setoption(engine: &mut Engine, tokens: &[&str]) {
             engine.stop_search();
             engine.tt.clear();
         }
+        // Accepted for compatibility; the search is single-threaded for now.
+        "Threads" => {}
         _ => {}
     }
 }

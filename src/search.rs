@@ -232,11 +232,14 @@ impl<E: Evaluator> Searcher<E> {
             let score = self.negamax(board, -INF, INF, depth as i32, 0);
 
             if self.stopped {
-                // Discard the interrupted iteration; `best_move` already holds
-                // the best fully-searched move (updates are gated on completion).
+                // Discard the interrupted iteration: keep the previous depth's
+                // committed best move (so `bestmove` always matches the last
+                // `info` line we printed).
                 break;
             }
 
+            // Commit the completed iteration's principal variation.
+            self.best_move = self.pv[0][0];
             self.last_score = score;
             self.last_depth = depth;
             if print {
@@ -387,9 +390,6 @@ impl<E: Evaluator> Searcher<E> {
                 if score > alpha {
                     alpha = score;
                     self.update_pv(ply, mv);
-                    if is_root {
-                        self.best_move = mv;
-                    }
                     if alpha >= beta {
                         // Beta cutoff: reward this quiet move for future ordering.
                         if !mv.is_capture() && !mv.is_promotion() {
