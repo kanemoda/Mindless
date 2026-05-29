@@ -88,9 +88,21 @@ Useful knobs (all optional, with sensible defaults):
 | `--concurrency` | how many games at once                    | cores − 2            |
 | `--elo0`/`--elo1` | the SPRT guard-rails                     | `0` / `5`            |
 | `--rounds`      | safety cap on number of games             | very large           |
+| `--fixed`       | play all `--rounds` games, no early stop  | off                  |
 
 The defaults run a fast game (8 seconds + 0.08s/move), use most of the CPU while
 leaving a couple of cores free, and apply the bounds above.
+
+`--fixed` turns off the SPRT early-stopping rule so the script plays a set number
+of games and reports the Elo difference over all of them. The SPRT mode is best
+for a quick pass/fail decision on a change; `--fixed` is best for *measuring* how
+much stronger one version is than another (for example, the total gain of a
+finished milestone against a fixed baseline) over a chosen, larger sample. For
+example, to gauge total progress since the baseline:
+
+```sh
+tools/sprt.sh --new wd --base baseline-m2 --fixed --rounds 1000
+```
 
 ---
 

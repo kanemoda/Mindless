@@ -30,6 +30,7 @@ ROUNDS="40000"                                            # max opening pairs (S
 GAMES="2"                                                 # games per round (2 = play both colors)
 NEW_LIMIT=""; BASE_LIMIT=""                               # extra per-engine fastchess tokens
 CONCURRENCY=""                                            # default: cores - 2
+FIXED=""                                                  # --fixed: play all rounds, no SPRT
 FASTCHESS="${FASTCHESS:-$ROOT/tools/bin/fastchess}"
 
 usage() {
@@ -49,6 +50,8 @@ Flags:
   --new-limit STR   extra per-engine tokens for new  (e.g. "nodes=20000")
   --base-limit STR  extra per-engine tokens for base (e.g. "nodes=20000")
   --fastchess PATH  fastchess binary. Default: tools/bin/fastchess
+  --fixed           play all --rounds games with no SPRT stopping rule
+                    (a fixed-length match, e.g. to gauge total Elo gained)
 EOF
 }
 
@@ -69,6 +72,7 @@ while [[ $# -gt 0 ]]; do
         --new-limit) NEW_LIMIT="$2"; shift 2;;
         --base-limit) BASE_LIMIT="$2"; shift 2;;
         --fastchess) FASTCHESS="$2"; shift 2;;
+        --fixed) FIXED=1; shift;;
         -h|--help) usage; exit 0;;
         *) echo "unknown argument: $1" >&2; usage; exit 1;;
     esac
@@ -121,8 +125,16 @@ LOG="$WORK/sprt.log"
 echo
 echo ">> SPRT  new[$NEW_REF] vs base[$BASE_REF]"
 echo "   TC=$TC  hash=${HASH}MB  concurrency=$CONCURRENCY  book=$(basename "$BOOK")"
-echo "   bounds: elo0=$ELO0 elo1=$ELO1 alpha=$ALPHA beta=$BETA"
+if [[ -n "$FIXED" ]]; then
+    echo "   fixed match: up to $ROUNDS rounds x $GAMES games (no SPRT stopping rule)"
+else
+    echo "   bounds: elo0=$ELO0 elo1=$ELO1 alpha=$ALPHA beta=$BETA"
+fi
 echo
+
+# In fixed-match mode, drop the SPRT stopping rule so every round is played.
+SPRT_ARG="-sprt elo0=$ELO0 elo1=$ELO1 alpha=$ALPHA beta=$BETA"
+[[ -n "$FIXED" ]] && SPRT_ARG=""
 
 set +e
 # shellcheck disable=SC2086
@@ -133,7 +145,7 @@ set +e
     -openings file="$BOOK" format=epd order=random \
     -rounds "$ROUNDS" -games "$GAMES" -repeat \
     -concurrency "$CONCURRENCY" \
-    -sprt elo0="$ELO0" elo1="$ELO1" alpha="$ALPHA" beta="$BETA" \
+    $SPRT_ARG \
     -draw movenumber=40 movecount=8 score=10 \
     -resign movecount=3 score=400 \
     -ratinginterval 20 \
@@ -148,7 +160,9 @@ grep -E "Ptnml"   "$LOG" | tail -1 || true
 LLR_LINE="$(grep -E "LLR:" "$LOG" | tail -1 || true)"
 echo "${LLR_LINE:-LLR: (not reported)}"
 
-if [[ -n "$LLR_LINE" ]]; then
+if [[ -n "$FIXED" ]]; then
+    echo "Verdict: FIXED MATCH — no SPRT stopping rule; the Elo line above is the measured difference"
+elif [[ -n "$LLR_LINE" ]]; then
     LLR="$(echo "$LLR_LINE" | sed -E 's/.*LLR: *(-?[0-9.]+).*/\1/')"
     LO="$(echo  "$LLR_LINE" | sed -E 's/.*\((-?[0-9.]+), *(-?[0-9.]+)\).*/\1/')"
     HI="$(echo  "$LLR_LINE" | sed -E 's/.*\((-?[0-9.]+), *(-?[0-9.]+)\).*/\2/')"
