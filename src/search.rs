@@ -36,6 +36,18 @@ const MOVE_OVERHEAD: u64 = 15;
 /// Quiescence delta-pruning margin (centipawns).
 const DELTA_MARGIN: i32 = 100;
 
+// Aspiration windows: from this depth on, the root searches inside a narrow
+// window centred on the previous iteration's score and only widens when the
+// true score falls outside it, instead of always using a full (-INF, INF)
+// window. Most iterations land inside the window, making them much cheaper.
+/// Iterative-deepening depth at which aspiration windows switch on.
+const ASPIRATION_MIN_DEPTH: i32 = 4;
+/// Initial half-width of the aspiration window (centipawns).
+const ASPIRATION_DELTA: i32 = 16;
+/// Once a window has widened past this half-width, reopen it fully rather than
+/// keep re-searching (handles big score swings and mate finds cheaply).
+const ASPIRATION_MAX_DELTA: i32 = 600;
+
 // Move-ordering score tiers.
 const TT_SCORE: i32 = 2_000_000;
 const CAPTURE_BASE: i32 = 1_000_000;
@@ -227,9 +239,10 @@ impl<E: Evaluator> Searcher<E> {
             .unwrap_or(MAX_PLY as u32 - 1)
             .min(MAX_PLY as u32 - 1);
 
+        let mut score = 0;
         for depth in 1..=max_depth {
             self.seldepth = 0;
-            let score = self.negamax(board, -INF, INF, depth as i32, 0);
+            score = self.search_root(board, depth as i32, score);
 
             if self.stopped {
                 // Discard the interrupted iteration: keep the previous depth's
@@ -261,6 +274,46 @@ impl<E: Evaluator> Searcher<E> {
         }
 
         self.best_move
+    }
+
+    /// Search the root to `depth`, using an aspiration window centred on the
+    /// previous iteration's score `prev`. On a fail-high or fail-low the window
+    /// is widened and the search retried; low depths (where the score is still
+    /// noisy) use a full window. Returns the final, in-window score.
+    fn search_root(&mut self, board: &mut Board, depth: i32, prev: i32) -> i32 {
+        if depth < ASPIRATION_MIN_DEPTH {
+            return self.negamax(board, -INF, INF, depth, 0);
+        }
+
+        let mut delta = ASPIRATION_DELTA;
+        let mut alpha = (prev - delta).max(-INF);
+        let mut beta = (prev + delta).min(INF);
+
+        loop {
+            let score = self.negamax(board, alpha, beta, depth, 0);
+            if self.stopped {
+                return score;
+            }
+
+            if score <= alpha {
+                // Fail low: relax alpha downward and pull beta toward the centre
+                // so the re-search re-establishes the upper bound quickly.
+                beta = (alpha + beta) / 2;
+                alpha = (score - delta).max(-INF);
+            } else if score >= beta {
+                // Fail high: relax beta upward.
+                beta = (score + delta).min(INF);
+            } else {
+                return score; // score is inside the window: accept it.
+            }
+
+            if delta >= ASPIRATION_MAX_DELTA {
+                alpha = -INF;
+                beta = INF;
+            } else {
+                delta += delta / 2; // widen ~1.5x per retry
+            }
+        }
     }
 
     fn negamax(
