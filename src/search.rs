@@ -54,6 +54,13 @@ const RFP_MAX_DEPTH: i32 = 6;
 /// Per-ply safety margin (centipawns) the static eval must clear beta by.
 const RFP_MARGIN: i32 = 80;
 
+// Null-move pruning.
+/// Minimum remaining depth at which a null move is tried.
+const NMP_MIN_DEPTH: i32 = 3;
+/// Null-move reduction is `NMP_BASE + depth / NMP_DIV`.
+const NMP_BASE: i32 = 3;
+const NMP_DIV: i32 = 3;
+
 // Move-ordering score tiers.
 const TT_SCORE: i32 = 2_000_000;
 const CAPTURE_BASE: i32 = 1_000_000;
@@ -288,7 +295,7 @@ impl<E: Evaluator> Searcher<E> {
     /// noisy) use a full window. Returns the final, in-window score.
     fn search_root(&mut self, board: &mut Board, depth: i32, prev: i32) -> i32 {
         if depth < ASPIRATION_MIN_DEPTH {
-            return self.negamax(board, -INF, INF, depth, 0);
+            return self.negamax(board, -INF, INF, depth, 0, true);
         }
 
         let mut delta = ASPIRATION_DELTA;
@@ -296,7 +303,7 @@ impl<E: Evaluator> Searcher<E> {
         let mut beta = (prev + delta).min(INF);
 
         loop {
-            let score = self.negamax(board, alpha, beta, depth, 0);
+            let score = self.negamax(board, alpha, beta, depth, 0, true);
             if self.stopped {
                 return score;
             }
@@ -329,6 +336,7 @@ impl<E: Evaluator> Searcher<E> {
         mut beta: i32,
         mut depth: i32,
         ply: usize,
+        do_null: bool,
     ) -> i32 {
         if self.stopped {
             return 0;
@@ -406,14 +414,42 @@ impl<E: Evaluator> Searcher<E> {
             }
         }
 
-        // Reverse futility pruning: near the leaves, if the static eval is so
-        // far above beta that even a depth-scaled margin keeps it there, assume
-        // this node fails high and return without searching. Skipped at PV
-        // nodes, while in check, and when beta is already a mate score.
-        if !is_pv && !in_check && depth <= RFP_MAX_DEPTH && beta.abs() < MATE_IN_MAX {
+        // Static-eval-based pruning (RFP and null-move pruning). Both apply only
+        // at non-PV nodes that are not in check and where beta is a normal
+        // (non-mate) score, so the static eval is computed once and shared.
+        if !is_pv && !in_check && beta.abs() < MATE_IN_MAX {
             let eval = self.eval.evaluate(board);
-            if eval - RFP_MARGIN * depth >= beta {
+
+            // Reverse futility pruning: near the leaves, if the eval beats beta
+            // by a depth-scaled margin, assume a fail-high and return at once.
+            if depth <= RFP_MAX_DEPTH && eval - RFP_MARGIN * depth >= beta {
                 return eval;
+            }
+
+            // Null-move pruning: hand the opponent a free move and search at a
+            // reduced depth; if the result is still at or above beta the
+            // position is so strong that we prune. Guarded by sufficient
+            // non-pawn material (zugzwang safeguard) and no consecutive null
+            // moves (`do_null`).
+            if do_null
+                && depth >= NMP_MIN_DEPTH
+                && eval >= beta
+                && Self::has_non_pawn_material(board)
+            {
+                let r = NMP_BASE + depth / NMP_DIV;
+                let null_depth = (depth - 1 - r).max(0);
+                let undo = board.make_null();
+                self.keys.push(board.zobrist_key());
+                let score = -self.negamax(board, -beta, -beta + 1, null_depth, ply + 1, false);
+                self.keys.pop();
+                board.unmake_null(undo);
+                if self.stopped {
+                    return 0;
+                }
+                if score >= beta {
+                    // Never propagate an unproven mate score from a null search.
+                    return if score >= MATE_IN_MAX { beta } else { score };
+                }
             }
         }
 
@@ -437,11 +473,11 @@ impl<E: Evaluator> Searcher<E> {
             // Principal-variation search: full window for the first move, a
             // null window probe for the rest (re-searched if it beats alpha).
             let score = if move_count == 1 {
-                -self.negamax(board, -beta, -alpha, depth - 1, ply + 1)
+                -self.negamax(board, -beta, -alpha, depth - 1, ply + 1, true)
             } else {
-                let probe = -self.negamax(board, -alpha - 1, -alpha, depth - 1, ply + 1);
+                let probe = -self.negamax(board, -alpha - 1, -alpha, depth - 1, ply + 1, true);
                 if probe > alpha && probe < beta {
-                    -self.negamax(board, -beta, -alpha, depth - 1, ply + 1)
+                    -self.negamax(board, -beta, -alpha, depth - 1, ply + 1, true)
                 } else {
                     probe
                 }
@@ -662,6 +698,17 @@ impl<E: Evaluator> Searcher<E> {
             back += 2;
         }
         false
+    }
+
+    /// True if the side to move has at least one knight, bishop, rook, or queen.
+    /// Used as a zugzwang safeguard before null-move pruning.
+    fn has_non_pawn_material(board: &Board) -> bool {
+        let us = board.side_to_move();
+        (board.pieces_colored(us, PieceType::Knight)
+            | board.pieces_colored(us, PieceType::Bishop)
+            | board.pieces_colored(us, PieceType::Rook)
+            | board.pieces_colored(us, PieceType::Queen))
+        .any()
     }
 
     /// Detect material that cannot force mate: K vs K, K+minor vs K, and
