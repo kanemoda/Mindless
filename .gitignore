@@ -10,3 +10,7 @@
 *.swp
 .idea/
 .vscode/
+/tools/bin/
+
+# fastchess tournament auto-save
+/config.json
