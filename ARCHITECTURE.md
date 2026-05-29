@@ -235,6 +235,27 @@ milestones will rely on.
 
 ---
 
+## Milestone 3 — the measuring instrument
+
+Milestone 3 added no playing ability. Instead it built the **scoreboard** that
+every future improvement must satisfy: a way to play a candidate version against
+the previous one over hundreds of fast games and decide, with controlled error
+rates, whether it is genuinely stronger.
+
+In plain terms: a small match-running program plays the two versions against
+each other from a book of slightly off-balance openings (which produces decisive
+games and sharp measurements), and a statistical stopping rule (SPRT) plays only
+as many games as needed before declaring **pass**, **fail**, or **keep going**.
+A one-line script wraps the whole thing, and the current engine is pinned with a
+permanent tag so total progress can always be measured back to this point.
+
+This instrument was itself validated — it shows no bias when a version plays an
+identical copy of itself, and it quickly and correctly detects a deliberately
+weakened version. From Milestone 4 on, no strength change is kept unless it
+passes this test. The full how-to lives in `TESTING.md`.
+
+---
+
 ## How the project is organized
 
 The code is split into focused, well-named parts, each responsible for one idea:

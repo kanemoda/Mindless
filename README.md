@@ -150,15 +150,29 @@ Move generation remains perft-exact; `cargo run --release -- bench` reports
 
 ## Testing
 
+Unit / correctness tests:
+
 ```sh
 cargo test                              # FEN, make/unmake, hashing, perft, search/tactics
 cargo test --release -- --ignored       # exhaustive perft against all reference depths
 ```
 
+Playing-strength testing (self-play SPRT via fastchess) — see
+[TESTING.md](TESTING.md) for the full guide:
+
+```sh
+tools/sprt.sh --new wd --base baseline-m2     # is the working tree stronger than the baseline?
+```
+
+This builds both versions, plays them under a fast time control from a balanced
+opening book, and prints a PASS / FAIL / CONTINUE verdict with the Elo estimate
+and scoreboard. From Milestone 4 on, every strength change must pass an SPRT test
+to be kept.
+
 ## Roadmap
 
-- **Milestone 3:** modern pruning and reductions (null-move, LMR, futility,
-  SEE-based pruning), tuned and validated with SPRT.
+- **Milestone 4:** modern pruning and reductions (null-move, LMR, futility,
+  SEE-based pruning), each validated with SPRT.
 - **Beyond:** NNUE evaluation, opening/endgame refinements, multithreaded search.
 
 ## License

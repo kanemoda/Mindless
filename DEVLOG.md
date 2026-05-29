@@ -5,6 +5,83 @@ the results. Newest milestone first.
 
 ---
 
+## Milestone 3 — Testing infrastructure (2026-05-29)
+
+### Goal
+
+Build a reliable, reproducible way to **measure** whether a change makes the
+engine play better, before we start making such changes. This milestone adds no
+new playing ability on purpose — it is the measuring instrument that every future
+strength improvement will have to satisfy. From the next milestone on, each
+change is kept only if it provably wins more games.
+
+### What was done, and why
+
+1. **Installed a match runner (`fastchess`).** A small, fast program that plays
+   two engine versions against each other and tallies results. Built from source
+   (it needs only a C++ compiler — no heavy dependencies). See
+   [TESTING.md](TESTING.md).
+
+2. **Added an opening book.** Every test game starts from a slightly sharp
+   position drawn from the widely-used "UHO" (Unbalanced Human Openings) book.
+   Starting from off-balance positions produces more decisive games and fewer
+   dull draws, which lets us detect small strength differences with far fewer
+   games. The full book is enormous, so a diverse 10,000-position sample is kept
+   in the repository.
+
+3. **Wrote the SPRT test script (`tools/sprt.sh`).** One command builds the two
+   versions, plays them under a fast time control, and prints a clear verdict —
+   PASS (keep the change), FAIL (discard it), or CONTINUE (needs more games) —
+   along with the estimated Elo gain, the scoreboard, and the confidence measure.
+   "SPRT" is a statistical method that plays only as many games as needed to be
+   confident, stopping early when the answer is clear.
+
+4. **Pinned a permanent baseline.** The current engine is tagged `baseline-m2`
+   so that, no matter how much the engine changes later, we can always measure
+   total progress back to this fixed point.
+
+5. **A couple of small engine touch-ups for clean testing** (no strength
+   change): the engine now advertises a standard `Threads` option, and it always
+   plays exactly the move it reported as best (previously, on a clock-forced cut
+   it could occasionally play a slightly different move than the last line it
+   displayed — harmless, but it cluttered the test logs).
+
+6. **Validated the instrument before trusting it** (see Results).
+
+### Results
+
+- **The match runner works** and drives the engine correctly over UCI.
+- **No bias.** Playing the engine against an identical copy of itself produced an
+  Elo difference of essentially zero (−0.9 ± 1.7) with wins and losses dead even
+  (163–164 with 73 draws over 400 deterministic games). This proves the harness
+  does not favour either side.
+- **Correctly detects real differences.** Against a deliberately crippled version
+  (its thinking capped to a tiny fraction), the harness detected a huge gap
+  (> +1000 Elo) and the test resolved to PASS in under 300 games — about a minute.
+  It reacts quickly and in the right direction.
+- **One-line workflow** is in place: `tools/sprt.sh --new wd --base baseline-m2`.
+- An *absolute* strength rating against an outside reference engine was **deferred**
+  (it needs careful calibration and was optional this milestone).
+
+### Key decisions, in brief
+
+- **fastchess over cutechess** — lighter, no GUI toolkit needed, builds from a
+  single `make`.
+- **UHO opening book** — the standard choice for sharp, low-draw, high-resolution
+  testing; sampled down to keep the repository small.
+- **SPRT with bounds (0, 5) and 5% error rates** — the conventional, efficient
+  setup that confirms or rejects a change in as few games as possible.
+- **Validate before trusting** — the no-bias and handicap checks prove the
+  measuring instrument is sound, so future verdicts can be believed.
+
+### What's next
+
+- **Milestone 4:** the first real strength features (search shortcuts such as
+  null-move pruning and late-move reductions), each one proposed on a branch and
+  kept only if it passes an SPRT test against the previous version.
+
+---
+
 ## Milestone 2 — Baseline search + evaluation (2026-05-29)
 
 ### Goal
