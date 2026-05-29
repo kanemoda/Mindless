@@ -48,6 +48,12 @@ const ASPIRATION_DELTA: i32 = 16;
 /// keep re-searching (handles big score swings and mate finds cheaply).
 const ASPIRATION_MAX_DELTA: i32 = 600;
 
+// Reverse futility pruning (a.k.a. static null-move pruning).
+/// Deepest remaining depth at which RFP is attempted.
+const RFP_MAX_DEPTH: i32 = 6;
+/// Per-ply safety margin (centipawns) the static eval must clear beta by.
+const RFP_MARGIN: i32 = 80;
+
 // Move-ordering score tiers.
 const TT_SCORE: i32 = 2_000_000;
 const CAPTURE_BASE: i32 = 1_000_000;
@@ -397,6 +403,17 @@ impl<E: Evaluator> Searcher<E> {
                     Bound::Upper if s <= alpha => return s,
                     _ => {}
                 }
+            }
+        }
+
+        // Reverse futility pruning: near the leaves, if the static eval is so
+        // far above beta that even a depth-scaled margin keeps it there, assume
+        // this node fails high and return without searching. Skipped at PV
+        // nodes, while in check, and when beta is already a mate score.
+        if !is_pv && !in_check && depth <= RFP_MAX_DEPTH && beta.abs() < MATE_IN_MAX {
+            let eval = self.eval.evaluate(board);
+            if eval - RFP_MARGIN * depth >= beta {
+                return eval;
             }
         }
 
