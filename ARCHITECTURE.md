@@ -256,6 +256,66 @@ passes this test. The full how-to lives in `TESTING.md`.
 
 ---
 
+## Milestone 4 — searching deeper with safe shortcuts
+
+Milestone 2 built a correct but deliberately plain search. Milestone 4 makes it
+genuinely strong by adding four well-established "shortcuts" that let the engine
+look much further ahead in the same time — **without** changing the conclusions
+it would eventually reach. Each was added on its own and kept only after proving,
+on the Milestone-3 scoreboard, that it won measurably more games.
+
+The unifying idea: a search spends most of its effort on lines that don't matter.
+These techniques recognise "this branch isn't worth full attention" much earlier,
+and spend the time saved on going deeper where it counts.
+
+### 1. Starting from a good guess — "aspiration windows"
+
+Each time the engine searches one level deeper, it already has a close estimate
+of the score from the level before. Rather than beginning each new level with a
+completely open mind, it starts with a narrow expectation centred on that
+estimate. If the true score lands inside that narrow band — which it usually
+does — the level is far cheaper to search; if it falls outside, the engine simply
+widens the band and looks again. Cheaper levels mean more of them in the same
+time.
+
+### 2. "I'm already winning easily" — reverse futility pruning
+
+Close to the end of a line, if the engine's position is so good that even after
+subtracting a generous safety margin it still beats anything the opponent could
+realistically reach, it stops and accepts that it is winning here instead of
+dutifully checking every move. Clearly winning positions don't need to be
+dissected.
+
+### 3. "What if I just pass?" — null-move pruning
+
+A clever bluff. The engine pretends to skip its own turn, handing the opponent
+two moves in a row, and takes a quick, shallow look. If it is *still* ahead even
+after giving away a free move, then its real position (where it does get to move)
+must be so strong that the whole line can be safely set aside. This is switched
+off in the rare endgames where being forced to move is a disadvantage — so that
+passing would flatter the position — and it is carefully prevented from ever
+reporting a fake checkmate.
+
+### 4. "Try the unlikely moves cheaply first" — late move reductions
+
+Because the engine already sorts each position's moves best-first, the moves
+tried *late* are the ones it least expects to be good. So for those late, quiet
+moves it takes a deliberately shallow look first; only if that quick look is
+surprisingly promising does it invest in examining the move at full depth. This
+focuses effort where it matters and is the single biggest reason the engine now
+sees so much deeper.
+
+### The payoff
+
+From the standard start position, given five seconds to think, the engine now
+looks about **17 moves deep**, up from **9** before this milestone — nearly
+double, for the same time. In head-to-head testing the Milestone-4 engine
+overwhelms the Milestone-2 baseline. Every shortcut keeps the original
+safeguards: none fire while the king is in check, none reduce a move that gives
+check, mate scores stay exact, and move generation remains perfect.
+
+---
+
 ## How the project is organized
 
 The code is split into focused, well-named parts, each responsible for one idea:
@@ -274,13 +334,13 @@ project self-contained, portable, and easy to trust.
 
 ## What is deliberately *not* here yet
 
-- **No advanced search shortcuts.** The pruning and reduction tricks that let
-  top engines search far deeper in the same time are intentionally left for
-  Milestone 3, where each will be added *and measured* (via automated self-play
-  testing) to prove it genuinely strengthens the engine.
-- **No neural-network evaluation.** The current evaluation is a solid hand-made
-  one; the much stronger NNUE network arrives in a later milestone and will slot
-  into the interface already built for it.
+- **The first wave of search shortcuts has now landed** (Milestone 4, above):
+  aspiration windows, reverse-futility pruning, null-move pruning, and late move
+  reductions. More refinements of the same kind will follow, each measured the
+  same way before being kept.
+- **No neural-network evaluation yet.** The current evaluation is a solid
+  hand-made one; the much stronger NNUE network arrives in a later milestone and
+  will slot into the interface already built for it.
 
-These are the subject of upcoming milestones, and the architecture above was
-designed specifically to support them.
+The neural-network evaluation is the major item still ahead, and the architecture
+above was designed specifically to support it.

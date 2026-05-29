@@ -5,6 +5,97 @@ the results. Newest milestone first.
 
 ---
 
+## Milestone 4 — First strength batch: smarter searching (2026-05-29)
+
+### Goal
+
+Make the engine genuinely *stronger* by teaching its look-ahead four well-known
+"search shortcuts" that let it see much further in the same time — and prove each
+one helps, by the scoreboard, before keeping it. This is the first milestone
+whose changes had to earn their place: each technique was added on its own, then
+played a few hundred fast games against the best previous version, and was kept
+only if it won clearly more often (the SPRT test built in Milestone 3).
+
+### What was done, and why
+
+The four techniques, added and tested one at a time, in order:
+
+1. **Aspiration windows.** Each time the engine searches one level deeper it
+   already has a good guess of the score from the level before. Instead of
+   re-examining the position with a completely open mind, it now starts from a
+   narrow expectation around that guess and only widens if reality falls outside
+   it. Most of the time reality matches, so the work is much cheaper.
+
+2. **Reverse futility pruning.** Near the end of a line, if the engine is already
+   doing *so* well that even a generous safety margin keeps it ahead of anything
+   the opponent could hope for, it stops and accepts the position instead of
+   examining every move. Clearly winning positions don't need to be picked apart.
+
+3. **Null-move pruning.** A powerful "what if I do nothing?" test: the engine
+   imagines passing its turn — handing the opponent two moves in a row — and
+   takes a quick shallow look. If it is *still* winning even after that handicap,
+   the real position must be very strong, so the line is pruned. This is switched
+   off in the rare endgames where being forced to move is an advantage (zugzwang),
+   and guarded so it can never invent a false checkmate.
+
+4. **Late move reductions.** Because moves are already tried best-first, the
+   *later*, quiet moves at each position are the ones least likely to be best. For
+   those, the engine first takes a deliberately shallow look and only re-examines
+   a move at full depth if that quick look is surprisingly promising. This is the
+   single biggest contributor to the extra depth.
+
+Throughout, the existing safeguards held: legal-move generation stayed perfect
+(perft unchanged), forced mates are still found and reported correctly, and the
+clock is still respected. Every change was a search-only change behind the same
+interfaces.
+
+### Results
+
+Every one of the four techniques **passed** its self-play test, each measured
+against the best version that came before it:
+
+| Technique                | Verdict | Elo gain      | Games | Score (W–L–D) |
+|--------------------------|:-------:|--------------:|------:|---------------|
+| Aspiration windows       |  PASS   | +36.4 ± 13.1  | 1646  | 689–517–440   |
+| Reverse futility pruning |  PASS   | +148.0 ± 27.3 |  500  | 293–92–115    |
+| Null-move pruning        |  PASS   | +68.0 ± 18.3  |  906  | 413–238–255   |
+| Late move reductions     |  PASS   | +161.6 ± 26.7 |  456  | 253–55–148    |
+
+- **Total strength gain:** over a fixed 2,000-game match, the finished
+  Milestone-4 engine measured **+348 ± 19 Elo** stronger than the Milestone-2
+  baseline — it scored 88% (1618 wins, 93 losses, 289 draws), an enormous jump in
+  playing strength.
+- **Sees much deeper.** From the start position in five seconds it now reaches
+  **depth 17**, up from **depth 9** at the baseline — nearly twice as far ahead
+  for the same thinking time.
+- **Quality checks clean:** optimized build, the full automated test suite
+  (forced mates, tactics, time/node-limit obedience), the linter, and the
+  formatter all pass; move generation remains perft-exact.
+
+### Key decisions, in brief
+
+- **One technique at a time, scoreboard-gated.** Each was implemented on its own
+  branch and kept only after winning a self-play SPRT against the previous best —
+  nothing was trusted on intuition alone.
+- **Conservative, mainstream settings** for each shortcut, with the usual safety
+  guards (never prune while in check, never reduce a checking move, protect
+  against false mates and zugzwang). All four passed on the first attempt, with no
+  tactical regressions.
+- **Added a fixed-match mode** to the test script (`--fixed`) so total progress
+  against a fixed reference can be measured over a set number of games, not just
+  as a pass/fail verdict.
+- **Tagged the result** `baseline-m4`, a new and much stronger reference point for
+  measuring future progress.
+
+### What's next
+
+- **More search refinements** (further pruning and extension ideas), each held to
+  the same scoreboard standard.
+- Further out: replacing the hand-made position judgement with a **neural-network
+  evaluation (NNUE)**, which slots into the interface built for it in Milestone 2.
+
+---
+
 ## Milestone 3 — Testing infrastructure (2026-05-29)
 
 ### Goal
