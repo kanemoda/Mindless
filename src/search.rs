@@ -87,16 +87,27 @@ const LMR_DIVISOR: f64 = 2.25;
 
 // Move-ordering score tiers. Winning/equal captures (SEE >= 0) rank just below
 // the TT move; killers and history-ranked quiets follow; losing captures
-// (SEE < 0) are demoted below every quiet so they are tried last.
+// (SEE < 0) are demoted below every quiet so they are tried last. Quiet moves
+// are ranked by their combined history (main + continuation), which is bounded
+// comfortably inside the killer tier.
 const TT_SCORE: i32 = 2_000_000;
 const CAPTURE_BASE: i32 = 1_000_000;
 const KILLER0_SCORE: i32 = 900_000;
 const KILLER1_SCORE: i32 = 800_000;
-const HISTORY_CAP: i32 = 700_000;
 const BAD_CAPTURE_BASE: i32 = -1_000_000;
 
 /// Upper bound on legal moves in any position; sizes the ordering scratch array.
 const MAX_MOVES: usize = 256;
+
+// History heuristics (main butterfly history plus continuation history).
+/// Maximum magnitude of any history value; the gravity update keeps values here.
+const HIST_CAP: i32 = 16_384;
+/// Cap on a single history bonus/penalty (the raw value is `depth * depth`).
+const HIST_MAX_BONUS: i32 = 1_200;
+/// Combined history is divided by this and clamped to ±2 to nudge the LMR depth.
+const HIST_LMR_DIV: i32 = 8_192;
+/// Most quiet moves remembered per node for the history penalty ("malus").
+const MAX_QUIETS: usize = 64;
 
 /// The limits requested by a `go` command.
 #[derive(Clone, Default)]
@@ -166,6 +177,54 @@ fn lmr_reduction(depth: i32, move_count: i32) -> i32 {
     table[d][m]
 }
 
+/// A reference to a recently played move for continuation history: the moving
+/// piece's index (`0..12`) and its destination square index (`0..64`). `None`
+/// stands for "no real move" (the root, or a null move).
+type ContRef = Option<(usize, usize)>;
+
+/// Number of continuation plies tracked: the move one ply back and two plies back.
+const CONT_PLIES: usize = 2;
+
+/// Move a history value toward a bonus with "gravity": the closer it already is
+/// to ±[`HIST_CAP`], the less a further bonus moves it, so values stay bounded
+/// in `[-HIST_CAP, HIST_CAP]` without an explicit clamp.
+#[inline]
+fn apply_gravity(entry: &mut i32, bonus: i32) {
+    *entry += bonus - *entry * bonus.abs() / HIST_CAP;
+}
+
+/// Continuation-history tables: how good a move (by piece + destination) tends to
+/// be when it follows a particular recent move. Indexed by `[offset][prev piece]
+/// [prev to][cur piece][cur to]`, where `offset` 0 is the move one ply back and 1
+/// the move two plies back. Stored as one flat heap array to keep the [`Searcher`]
+/// small and avoid a multi-megabyte stack temporary.
+struct ContHist {
+    table: Box<[i32]>,
+}
+
+impl ContHist {
+    fn new() -> ContHist {
+        ContHist {
+            table: vec![0i32; CONT_PLIES * 12 * 64 * 12 * 64].into_boxed_slice(),
+        }
+    }
+
+    #[inline]
+    fn index(offset: usize, prev: (usize, usize), cur: (usize, usize)) -> usize {
+        (((offset * 12 + prev.0) * 64 + prev.1) * 12 + cur.0) * 64 + cur.1
+    }
+
+    #[inline]
+    fn get(&self, offset: usize, prev: (usize, usize), cur: (usize, usize)) -> i32 {
+        self.table[Self::index(offset, prev, cur)]
+    }
+
+    #[inline]
+    fn update(&mut self, offset: usize, prev: (usize, usize), cur: (usize, usize), bonus: i32) {
+        apply_gravity(&mut self.table[Self::index(offset, prev, cur)], bonus);
+    }
+}
+
 /// Per-search state for one search thread.
 struct Searcher<E: Evaluator> {
     eval: E,
@@ -183,6 +242,10 @@ struct Searcher<E: Evaluator> {
 
     killers: [[Move; 2]; MAX_PLY],
     history: [[i32; 64]; 64],
+    cont: ContHist,
+    /// Per-ply record of the move played to descend from that ply, used to index
+    /// continuation history one and two plies deeper.
+    conth_stack: [ContRef; MAX_PLY],
     pv: [[Move; MAX_PLY]; MAX_PLY],
     pv_len: [usize; MAX_PLY],
 
@@ -265,6 +328,8 @@ impl<E: Evaluator> Searcher<E> {
             stopped: false,
             killers: [[Move::NULL; 2]; MAX_PLY],
             history: [[0; 64]; 64],
+            cont: ContHist::new(),
+            conth_stack: [None; MAX_PLY],
             pv: [[Move::NULL; MAX_PLY]; MAX_PLY],
             pv_len: [0; MAX_PLY],
             keys,
@@ -490,6 +555,7 @@ impl<E: Evaluator> Searcher<E> {
                 let r = NMP_BASE + depth / NMP_DIV;
                 let null_depth = (depth - 1 - r).max(0);
                 let undo = board.make_null();
+                self.conth_stack[ply] = None;
                 self.keys.push(board.zobrist_key());
                 let score = -self.negamax(board, -beta, -beta + 1, null_depth, ply + 1, false);
                 self.keys.pop();
@@ -504,17 +570,31 @@ impl<E: Evaluator> Searcher<E> {
             }
         }
 
+        // Continuation-history context: the moves played one and two plies back.
+        let cont0 = if ply >= 1 {
+            self.conth_stack[ply - 1]
+        } else {
+            None
+        };
+        let cont1 = if ply >= 2 {
+            self.conth_stack[ply - 2]
+        } else {
+            None
+        };
+
         let mut moves = MoveList::new();
         generate_legal(board, &mut moves);
         if moves.is_empty() {
             return if in_check { -MATE + ply as i32 } else { DRAW };
         }
-        self.order_moves(board, &mut moves, tt_move, ply, true);
+        self.order_moves(board, &mut moves, tt_move, ply, cont0, cont1, true);
 
         let original_alpha = alpha;
         let mut best = -INF;
         let mut best_move = Move::NULL;
         let mut move_count = 0;
+        let mut quiets_tried = [Move::NULL; MAX_QUIETS];
+        let mut n_quiets = 0usize;
 
         for &mv in moves.as_slice() {
             let is_quiet = !mv.is_capture() && !mv.is_promotion();
@@ -534,7 +614,16 @@ impl<E: Evaluator> Searcher<E> {
                 }
             }
 
+            // The moving piece (read before the move, while it is still on
+            // `from`) keys this move in the continuation-history tables.
+            let piece_idx = board.piece_on(mv.from()).map_or(0, |p| p.index());
+            if is_quiet && n_quiets < quiets_tried.len() {
+                quiets_tried[n_quiets] = mv;
+                n_quiets += 1;
+            }
+
             let undo = board.make_move(mv);
+            self.conth_stack[ply] = Some((piece_idx, mv.to().index()));
             self.keys.push(board.zobrist_key());
             move_count += 1;
 
@@ -558,6 +647,16 @@ impl<E: Evaluator> Searcher<E> {
                     if is_pv {
                         reduction -= 1;
                     }
+                    // Reduce less for moves with good combined history, more for
+                    // moves with bad history.
+                    let h = self.quiet_history(
+                        mv.from().index(),
+                        mv.to().index(),
+                        piece_idx,
+                        cont0,
+                        cont1,
+                    );
+                    reduction -= (h / HIST_LMR_DIV).clamp(-2, 2);
                     reduction = reduction.clamp(0, depth - 2);
                 }
 
@@ -595,11 +694,21 @@ impl<E: Evaluator> Searcher<E> {
                     alpha = score;
                     self.update_pv(ply, mv);
                     if alpha >= beta {
-                        // Beta cutoff: reward this quiet move for future ordering.
-                        if !mv.is_capture() && !mv.is_promotion() {
+                        // Beta cutoff. Reward the cutoff move (if quiet) and
+                        // penalise the earlier quiets that failed to cut, across
+                        // both the main and continuation history tables.
+                        if is_quiet {
                             self.store_killer(ply, mv);
-                            self.update_history(mv, depth);
                         }
+                        self.update_histories(
+                            board,
+                            mv,
+                            is_quiet,
+                            depth,
+                            cont0,
+                            cont1,
+                            &quiets_tried[..n_quiets],
+                        );
                         break;
                     }
                 }
@@ -661,7 +770,7 @@ impl<E: Evaluator> Searcher<E> {
             if moves.is_empty() {
                 return -MATE + ply as i32; // checkmate
             }
-            self.order_moves(board, &mut moves, Move::NULL, ply, false);
+            self.order_moves(board, &mut moves, Move::NULL, ply, None, None, false);
         } else {
             stand = self.eval.evaluate(board);
             if stand >= beta {
@@ -672,7 +781,7 @@ impl<E: Evaluator> Searcher<E> {
             }
             best = stand;
             generate_noisy(board, &mut moves);
-            self.order_moves(board, &mut moves, Move::NULL, ply, false);
+            self.order_moves(board, &mut moves, Move::NULL, ply, None, None, false);
         }
 
         for &mv in moves.as_slice() {
@@ -735,19 +844,25 @@ impl<E: Evaluator> Searcher<E> {
     /// once per comparison. When `use_see` is false the capture split is skipped
     /// and every capture is ranked by plain MVV-LVA — used by quiescence, which
     /// prunes losing captures directly and so never needs them demoted.
+    #[allow(clippy::too_many_arguments)]
     fn order_moves(
         &self,
         board: &Board,
         moves: &mut MoveList,
         tt_move: Move,
         ply: usize,
+        cont0: ContRef,
+        cont1: ContRef,
         use_see: bool,
     ) {
         let killers = self.killers[ply];
         let n = moves.len();
         let mut scored = [(0i32, Move::NULL); MAX_MOVES];
         for (slot, &mv) in scored[..n].iter_mut().zip(moves.as_slice()) {
-            *slot = (self.score_move(board, mv, tt_move, killers, use_see), mv);
+            *slot = (
+                self.score_move(board, mv, tt_move, killers, cont0, cont1, use_see),
+                mv,
+            );
         }
         scored[..n].sort_unstable_by_key(|&(score, _)| std::cmp::Reverse(score));
         for (dst, src) in moves.as_mut_slice().iter_mut().zip(&scored[..n]) {
@@ -755,12 +870,15 @@ impl<E: Evaluator> Searcher<E> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn score_move(
         &self,
         board: &Board,
         mv: Move,
         tt_move: Move,
         killers: [Move; 2],
+        cont0: ContRef,
+        cont1: ContRef,
         use_see: bool,
     ) -> i32 {
         if mv == tt_move {
@@ -794,7 +912,32 @@ impl<E: Evaluator> Searcher<E> {
         if mv == killers[1] {
             return KILLER1_SCORE;
         }
-        self.history[mv.from().index()][mv.to().index()].min(HISTORY_CAP)
+        let pc = board.piece_on(mv.from()).map_or(0, |p| p.index());
+        self.quiet_history(mv.from().index(), mv.to().index(), pc, cont0, cont1)
+    }
+
+    /// Combined quiet-move history: the butterfly main history plus the
+    /// continuation history for one and two plies back. `pc` is the moving
+    /// piece's index, passed explicitly because the board may already be in the
+    /// child position (after the move was made) when this is called from LMR.
+    #[inline]
+    fn quiet_history(
+        &self,
+        from: usize,
+        to: usize,
+        pc: usize,
+        cont0: ContRef,
+        cont1: ContRef,
+    ) -> i32 {
+        let mut h = self.history[from][to];
+        let cur = (pc, to);
+        if let Some(prev) = cont0 {
+            h += self.cont.get(0, prev, cur);
+        }
+        if let Some(prev) = cont1 {
+            h += self.cont.get(1, prev, cur);
+        }
+        h
     }
 
     fn store_killer(&mut self, ply: usize, mv: Move) {
@@ -804,9 +947,53 @@ impl<E: Evaluator> Searcher<E> {
         }
     }
 
-    fn update_history(&mut self, mv: Move, depth: i32) {
-        let entry = &mut self.history[mv.from().index()][mv.to().index()];
-        *entry = (*entry + depth * depth).min(1 << 20);
+    /// Update history after a beta cutoff: reward `cutoff` (when it is a quiet
+    /// move) and penalise the earlier quiet moves that were tried but did not
+    /// cut, in both the main and continuation tables.
+    #[allow(clippy::too_many_arguments)]
+    fn update_histories(
+        &mut self,
+        board: &Board,
+        cutoff: Move,
+        cutoff_is_quiet: bool,
+        depth: i32,
+        cont0: ContRef,
+        cont1: ContRef,
+        tried: &[Move],
+    ) {
+        let bonus = (depth * depth).min(HIST_MAX_BONUS);
+        if cutoff_is_quiet {
+            self.bump_history(board, cutoff, cont0, cont1, bonus);
+        }
+        for &q in tried {
+            if q != cutoff {
+                self.bump_history(board, q, cont0, cont1, -bonus);
+            }
+        }
+    }
+
+    /// Apply one history delta to a quiet move across the main and continuation
+    /// tables. The board is at the node's own position, so `mv.from()` still
+    /// holds the moving piece.
+    fn bump_history(
+        &mut self,
+        board: &Board,
+        mv: Move,
+        cont0: ContRef,
+        cont1: ContRef,
+        delta: i32,
+    ) {
+        let from = mv.from().index();
+        let to = mv.to().index();
+        apply_gravity(&mut self.history[from][to], delta);
+        let pc = board.piece_on(mv.from()).map_or(0, |p| p.index());
+        let cur = (pc, to);
+        if let Some(prev) = cont0 {
+            self.cont.update(0, prev, cur, delta);
+        }
+        if let Some(prev) = cont1 {
+            self.cont.update(1, prev, cur, delta);
+        }
     }
 
     fn update_pv(&mut self, ply: usize, mv: Move) {
