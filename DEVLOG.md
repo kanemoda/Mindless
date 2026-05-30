@@ -5,6 +5,75 @@ the results. Newest milestone first.
 
 ---
 
+## Milestone 6 — First NNUE evaluation (IN PROGRESS, 2026-05-30)
+
+### What this milestone is
+
+Until now the engine has judged positions with a hand-written formula (material
+plus piece-placement tables, "PeSTO"). Milestone 6 replaces that judgement with a
+small **neural network** — an *NNUE* ("efficiently updatable neural network"),
+the technique behind every modern top engine. The network learns, from millions
+of example positions, a far more accurate sense of who stands better. This is the
+single biggest expected strength jump of the project.
+
+This milestone is **not finished yet.** What follows records exactly what is done
+and what remains, so it can be picked up cleanly.
+
+### Done so far
+
+1. **The engine can run a network (the "inference" side).** The engine now
+   contains a complete NNUE evaluator built to the standard first-network design
+   (a two-sided "perspective" network with one hidden layer of 128 units). It is
+   switched on by pointing the engine's new `EvalFile` option at a trained
+   network file; with no file it keeps using PeSTO exactly as before, so the
+   engine remains a fully working Milestone-5-strength program. Careful automated
+   tests confirm the network maths is correct and that the fast incremental
+   bookkeeping (used while searching) always agrees with a from-scratch
+   recompute.
+
+2. **The engine can generate its own training data.** A new `datagen` mode plays
+   the engine against itself very fast from varied openings and records, for each
+   suitable position, the engine's evaluation and the eventual game result — the
+   raw material a network learns from. A first dataset of **42,125,153 positions**
+   has been generated.
+
+3. **A verification tool.** A new `eval` command prints the engine's network
+   evaluation for any position, so the engine's output can be checked, position by
+   position, against the training tool's own reference before any strength testing
+   is trusted.
+
+### What remains (resume here)
+
+- **Install the GPU training toolkit (CUDA), then build the trainer.** The chosen
+  trainer is *bullet* (a standard, fast NNUE trainer). The graphics card is
+  present and working; only the CUDA *toolkit* still needs installing.
+- **Train the first network** on the generated data, then run the mandatory
+  "eval-match" check (engine output must equal the trainer's reference within
+  rounding) before trusting any game results.
+- **Prove it on the scoreboard:** the network engine must win an SPRT against the
+  Milestone-5 baseline. Only then is the milestone a success.
+- **Finalize:** measure the Elo gain, commit the trained network, tag
+  `baseline-m6`, and finish these docs.
+
+### Resume-critical details (for the next session)
+
+- **Training data:** `tools/nnue/data/mindless-v1.txt` — ~2.5 GB, 42,125,153
+  positions, one per line as `FEN | score | result` (score in centipawns and
+  result as 1.0/0.5/0.0, both from White's view). This file is **deliberately not
+  committed** (it is gigabytes; regenerate with `mindless datagen` if lost).
+- **Network shape:** `(768 -> 128)x2 -> 1`, squared-clipped-ReLU activation;
+  plain 768 piece-square inputs (no king buckets), matching the bullet `simple`
+  example. The trainer **must** use this exact shape and the engine's
+  quantization (feature scale 255, output scale 64, evaluation scale 400) or the
+  eval-match check will fail.
+- **Trainer:** bullet (`github.com/jw1912/bullet`); needs the CUDA toolkit. Build
+  with `CUDA_PATH=/usr/local/cuda cargo build -r --features cuda`. Its data
+  converter (`bullet-utils`) does not need CUDA and already builds.
+- **No `baseline-m6` tag yet** — the milestone is incomplete; the current `main`
+  is a working PeSTO engine with the (inactive) NNUE machinery in place.
+
+---
+
 ## Milestone 5 — Second strength batch: sharper searching (2026-05-30)
 
 ### Goal
