@@ -378,6 +378,74 @@ perfect.
 
 ---
 
+## Milestone 6 — judging positions with a neural network
+
+Every milestone so far judged a position with a hand-written formula: count the
+material, add bonuses from expert-tuned piece-square tables, blend between opening
+and endgame. Milestone 6 replaces that formula with a small **neural network**
+trained on the engine's own games — the *NNUE* approach that powers every modern
+top engine. For the first time the engine's judgement is *learned* rather than
+hand-written.
+
+### What an NNUE is, in plain terms
+
+Think of the evaluation as a function: board in, single number out (who is better,
+and by how much). A neural network is just a very flexible such function with many
+small dials ("weights") that are tuned automatically so its answers match a large
+pile of examples. "NNUE" is a particular, deliberately *small and fast* network
+design, so this richer judgement can be afforded at the enormous number of
+positions a search visits. Mindless uses the standard "first network" shape:
+
+- It reads the board as 768 simple yes/no facts ("is there a white knight on c3?"
+  — one fact per piece type per square).
+- Those feed a single hidden layer of 128 numbers, computed **from both sides'
+  points of view** (what's good for me is bad for you) — which is why the design
+  is called *perspective*.
+- Those numbers are combined into the one final score.
+
+The network uses whole-number arithmetic (its weights are stored as small
+integers), which makes it fast and — importantly — makes its output *exactly*
+reproducible rather than subject to tiny floating-point drift.
+
+### Where the training data came from
+
+A network is only as good as its examples, and the engine generated its own: a
+`datagen` mode played **millions of very fast self-play games** from varied
+openings and, for each calm position, recorded two things — the engine's own
+evaluation at that moment, and who eventually won. That produced **42 million**
+labelled positions. The network is trained to predict a blend of "what did the old
+evaluation think" and "how did the game actually end", so it learns to imitate the
+hand-crafted evaluation and then improve on it by being anchored to real results.
+
+### Training, and the all-important check
+
+Tuning the dials runs on a graphics card (using a standard, purpose-built trainer
+called *bullet*); here it took about two and a half minutes. The result is a 193 KB
+file of weights **built directly into the engine**, so the network is the
+evaluation out of the box.
+
+Before trusting it, one check matters above all: the engine and the trainer must
+agree, to the last point, on what the network *says* about a position — using
+entirely separate code. If they agree across a spread of positions, the engine is
+provably running the network exactly as trained. They matched **exactly**, which
+is what licenses believing the game results that follow.
+
+### Did it work?
+
+Yes. Head-to-head against the Milestone-5 engine (the hand-crafted evaluation), the
+network engine is **about 45 Elo stronger**, confirmed by the project's usual
+statistical match test. Interestingly it wins while searching *less* deeply — about
+17 moves ahead in five seconds instead of 20 — because the network costs more to
+consult than the old formula. Winning anyway is the entire point of NNUE: better
+judgement outweighs raw depth. (A planned speed-up — updating the network's inputs
+incrementally as moves are made, rather than recomputing them from scratch each
+time — should win much of that depth back.)
+
+The hand-crafted evaluation is not gone: it remains as a fallback and a runtime
+option, and it is still what the reusable library uses by default.
+
+---
+
 ## How the project is organized
 
 The code is split into focused, well-named parts, each responsible for one idea:
@@ -396,14 +464,18 @@ project self-contained, portable, and easy to trust.
 
 ## What is deliberately *not* here yet
 
-- **Two waves of search refinements have now landed** (Milestones 4 and 5,
-  above): aspiration windows, reverse-futility pruning, null-move pruning and
-  late move reductions, followed by static-exchange-evaluation move ordering and
-  pruning, continuation history, and late-move / history pruning. The search is
-  now strong and well-pruned.
-- **No neural-network evaluation yet.** The current evaluation is a solid
-  hand-made one; the much stronger NNUE network arrives in a later milestone and
-  will slot into the interface already built for it.
+- **Two waves of search refinements and a neural-network evaluation have now
+  landed** (Milestones 4–6): aspiration windows, reverse-futility pruning,
+  null-move pruning and late move reductions; then static-exchange-evaluation move
+  ordering and pruning, continuation history, and late-move / history pruning; and
+  a first **NNUE** evaluation that dropped into the swap-in interface exactly as
+  planned. The search is strong and well-pruned, and the judgement is now learned.
+- **The NNUE is a first network with deliberate headroom.** It is recomputed from
+  scratch at every position rather than updated incrementally (a known,
+  already-written speed-up), and it was trained on a modest 42-million-position
+  dataset. Both are next steps, not oversights.
+- **Still ahead:** multithreaded search, opening-book / endgame-tablebase support,
+  and an absolute strength rating against external engines.
 
-The neural-network evaluation is the major item still ahead, and the architecture
-above was designed specifically to support it.
+The swap-in evaluation interface — planned back in Milestone 2 — is what let the
+network drop in without touching the search.

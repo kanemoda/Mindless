@@ -49,7 +49,7 @@ impl Engine {
             stop: Arc::new(AtomicBool::new(false)),
             search: None,
             hash_mb: DEFAULT_HASH_MB,
-            eval: Eval::hand(),
+            eval: Eval::default_net(),
         }
     }
 
@@ -129,10 +129,11 @@ fn print_id() {
     println!("option name Hash type spin default {DEFAULT_HASH_MB} min 1 max {MAX_HASH_MB}");
     println!("option name Threads type spin default 1 min 1 max 1");
     println!("option name Clear Hash type button");
-    // Path to an NNUE network file (bullet `quantised.bin`). Empty (the default)
-    // keeps the hand-crafted PeSTO evaluation. Setting it to "<empty>" or
-    // clearing it reverts to PeSTO.
-    println!("option name EvalFile type string default <empty>");
+    // Path to an NNUE network file (bullet `quantised.bin`). The engine ships with
+    // a built-in network and uses it by default; this option overrides it with
+    // another net. "<default>" (or empty) restores the built-in net; "<none>"
+    // falls back to the hand-crafted PeSTO evaluation.
+    println!("option name EvalFile type string default <default>");
     println!("uciok");
 }
 
@@ -176,15 +177,21 @@ fn handle_setoption(engine: &mut Engine, tokens: &[&str]) {
     }
 }
 
-/// Load an NNUE network from `path` and make it the active evaluator, or revert
-/// to the hand-crafted evaluation when `path` is empty / a clear sentinel. On a
-/// load failure the previous evaluator is kept and the reason is reported via an
-/// `info string` (UCI's channel for human-readable messages).
+/// Load an NNUE network from `path` and make it the active evaluator. The
+/// sentinels `<default>` / empty restore the built-in network and `<none>` selects
+/// the hand-crafted PeSTO evaluation. On a load failure the previous evaluator is
+/// kept and the reason is reported via an `info string` (UCI's channel for
+/// human-readable messages).
 fn set_eval_file(engine: &mut Engine, path: &str) {
     let trimmed = path.trim();
-    if trimmed.is_empty() || trimmed == "<empty>" || trimmed == "<default>" {
+    if trimmed.is_empty() || trimmed == "<default>" {
+        engine.eval = Eval::default_net();
+        println!("info string using the built-in NNUE network");
+        return;
+    }
+    if trimmed == "<none>" || trimmed.eq_ignore_ascii_case("off") {
         engine.eval = Eval::hand();
-        println!("info string EvalFile cleared; using hand-crafted (PeSTO) evaluation");
+        println!("info string using hand-crafted (PeSTO) evaluation");
         return;
     }
     match std::fs::read(trimmed) {

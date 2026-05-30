@@ -292,10 +292,24 @@ pub enum Eval {
     Net(Nnue),
 }
 
+/// The network the engine evaluates with by default, embedded directly in the
+/// binary so `mindless` plays at full strength out of the box with no external
+/// file. This is the committed `tools/nnue/nets/mindless-v1.nnue`; the UCI
+/// `EvalFile` option overrides it with a different net at runtime.
+pub const DEFAULT_NET: &[u8] = include_bytes!("../tools/nnue/nets/mindless-v1.nnue");
+
 impl Eval {
-    /// The default evaluator (hand-crafted PeSTO).
+    /// The hand-crafted PeSTO evaluator — the dependency-free fallback, and what
+    /// the library's [`crate::search::search_sync`] convenience uses.
     pub fn hand() -> Eval {
         Eval::Hand(crate::eval::HandCrafted::new())
+    }
+
+    /// The engine's default evaluator: the embedded [`DEFAULT_NET`] NNUE network,
+    /// falling back to the hand-crafted evaluation only if the embedded bytes
+    /// fail to parse (guarded by a unit test, so that fallback should never fire).
+    pub fn default_net() -> Eval {
+        Nnue::from_bytes(DEFAULT_NET).map_or_else(Eval::hand, Eval::Net)
     }
 
     /// A human-readable name for the active evaluator (for UCI logging).
@@ -379,6 +393,18 @@ mod tests {
             NETWORK_BYTES,
             INPUT * HIDDEN * 2 + HIDDEN * 2 + 2 * HIDDEN * 2 + 2
         );
+    }
+
+    #[test]
+    fn embedded_default_net_is_valid() {
+        // The binary embeds `DEFAULT_NET`; it must be a correctly-sized network so
+        // the engine's default evaluator is the NNUE, never the silent fallback.
+        assert!(
+            Network::from_bytes(DEFAULT_NET).is_some(),
+            "embedded default net is {} bytes; expected {NETWORK_BYTES} or its padded size",
+            DEFAULT_NET.len()
+        );
+        assert!(matches!(Eval::default_net(), Eval::Net(_)));
     }
 
     /// Walking a short game, the incremental add/remove of moved pieces must

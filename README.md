@@ -7,12 +7,12 @@ Mindless is a single Rust crate that is **both** a runnable chess engine (the
 can run it) **and** a library (other Rust projects can depend on it to represent
 positions, generate moves, and search).
 
-> **Status — Milestone 5 (Second search batch).** Mindless is now a strong
-> searcher: on top of the Milestone-4 pruning it adds static-exchange-evaluation
-> move ordering and pruning, continuation history, and late-move / history
-> pruning — each validated by self-play SPRT. From the start position it searches
-> about **20 plies deep in five seconds**. The hand-crafted evaluation still
-> stands in for a future NNUE network. See [DEVLOG.md](DEVLOG.md) and
+> **Status — Milestone 6 (First NNUE).** Mindless now evaluates positions with a
+> trained **NNUE neural network**, embedded in the binary and on by default. It
+> measures **+46 Elo** over the Milestone-5 hand-crafted evaluation (SPRT) and
+> **+405 Elo** over the first playing baseline. From the start position it searches
+> about **17 plies deep in five seconds** — the network costs some depth versus the
+> old evaluation but judges positions far better. See [DEVLOG.md](DEVLOG.md) and
 > [ARCHITECTURE.md](ARCHITECTURE.md) for plain-language explanations.
 
 ## Features
@@ -59,6 +59,17 @@ positions, generate moves, and search).
 - Every strength change is kept only after passing a self-play SPRT (a tested but
   unhelpful idea — singular extensions — was measured and deliberately left out).
 
+**Neural-network evaluation (Milestone 6)**
+
+- **NNUE evaluation** — a `(768 -> 128)x2 -> 1` perspective network with
+  squared-clipped-ReLU activation and integer quantization, trained on ~42M
+  self-play positions with [bullet](https://github.com/jw1912/bullet). The 193 KB
+  net is **embedded in the binary and used by default**; the engine's integer
+  inference is verified to match the trainer's reference output exactly
+  ("eval-match"). SPRT-validated at **+46 Elo** over the hand-crafted evaluation.
+  The classical PeSTO evaluation stays available at runtime and remains the
+  library's default. See `tools/nnue/trainer/` to reproduce the net.
+
 ## Requirements
 
 Rust (stable). If you don't have it, install via [rustup](https://rustup.rs):
@@ -101,6 +112,7 @@ engine and point it at the `target/release/mindless` binary.
 |--------------|--------|---------|------------------------------------------|
 | `Hash`       | spin   | 64      | Transposition table size in MB (1–4096). |
 | `Clear Hash` | button | —       | Empty the transposition table.           |
+| `EvalFile`   | string | built-in | NNUE network file to use instead of the embedded one. `<default>` (or empty) restores the built-in net; `<none>` selects the hand-crafted PeSTO evaluation. |
 
 ### Supported `go` parameters
 
@@ -156,14 +168,17 @@ The public surface is intentionally small and stable: `Board`, `Move`,
 Example search output (release build, one development machine; figures vary by
 hardware):
 
-- **Start position**, 5 s: reaches **depth 20** (with a deeper selective line) on
-  a development machine — up from depth 9 at the Milestone-2 baseline; figures
-  vary by hardware.
+- **Start position**, 5 s: reaches **depth 17** with the NNUE evaluation (it was
+  depth 20 with the old hand-crafted evaluation — the network trades some search
+  depth for much sharper judgement); figures vary by hardware.
 - **Tactic** (`2rr3k/pp3pp1/1nnqbN1p/3pN3/2pP4/2P3Q1/PPB4P/R4RK1 w`): finds the
   winning `Qg6` and reports **mate in 2** essentially instantly.
+- **Playing strength:** the NNUE evaluation is **+46 ± 16 Elo** over the
+  Milestone-5 hand-crafted evaluation (SPRT, 1,512 games) and **+405 ± 45 Elo**
+  over `baseline-m2`, the first playing baseline (fixed 600-game match).
 
 Move generation remains perft-exact; `cargo run --release -- bench` reports
-~260 Mnps aggregate over the reference suite.
+~254 Mnps aggregate over the reference suite.
 
 ## Testing
 
@@ -188,11 +203,13 @@ to be kept.
 
 ## Roadmap
 
-- **Done (Milestones 4–5):** modern pruning and reductions (null-move, LMR,
-  reverse futility), then SEE-based ordering and pruning, continuation history,
-  and late-move / history pruning — all SPRT-validated.
-- **Next:** NNUE evaluation (slotting into the existing `Evaluator` interface),
-  then opening/endgame refinements and multithreaded search.
+- **Done (Milestones 4–6):** modern pruning and reductions (null-move, LMR,
+  reverse futility); SEE-based ordering and pruning, continuation history, and
+  late-move / history pruning; and a first SPRT-validated **NNUE evaluation**
+  (embedded, on by default) — all SPRT-validated.
+- **Next:** incremental NNUE accumulator updates inside the search (to recover the
+  depth the network costs), larger and network-labelled training data for a
+  stronger net, then opening/endgame refinements and multithreaded search.
 
 ## License
 

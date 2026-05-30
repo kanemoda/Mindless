@@ -145,6 +145,49 @@ engine will climb in strength without guesswork or regressions.
 
 ---
 
+## Testing a new evaluation — the NNUE "eval-match"
+
+Milestone 6 added a neural-network evaluation (NNUE). A *learned* evaluation needs
+one extra check **before** any game is played, on top of the usual SPRT.
+
+**The eval-match.** The network is trained by a separate program (bullet) and then
+run by the engine's own, independently written inference code. Those two must
+agree on a position's score to the last centipawn — otherwise the engine is not
+playing the network it was trained on, and no game result means anything. To check:
+
+```sh
+mindless eval <net.bin> "<FEN>"        # the engine's score for one position
+mindless eval <net.bin> < fens.txt     # or a list of FENs, one per line
+```
+
+The same FENs are scored by the trainer's reference inference
+(`tools/nnue/trainer/refeval.rs`); the two centipawn columns must be **identical**.
+This is run on a spread of positions — both sides to move, openings through
+endgames — and only once it matches exactly is the net trusted enough to test for
+strength. The Milestone-6 net matched exactly on every position tried.
+
+**Then the usual SPRT.** A trusted net is gated like any other strength change: it
+must beat the previous version on the scoreboard. The net is embedded in the binary
+and on by default, so the test is the normal comparison:
+
+```sh
+tools/sprt.sh --new wd --base baseline-m5     # network engine vs the hand-crafted one
+```
+
+To test a *specific* net file without rebuilding, or to switch a side's evaluation
+within one build, pass the engine option through the runner:
+
+```sh
+# load a particular net into the new engine
+tools/sprt.sh --new wd --base baseline-m5 --new-limit "option.EvalFile=/abs/path/net.bin"
+# turn the network off (hand-crafted PeSTO) on one side
+tools/sprt.sh --new wd --base wd --base-limit "option.EvalFile=<none>"
+```
+
+The Milestone-6 net passed at **+46 ± 16 Elo** over `baseline-m5` (hand-crafted).
+
+---
+
 ## How we know the instrument itself is trustworthy
 
 Before relying on it, the harness was validated two ways:

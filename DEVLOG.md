@@ -5,72 +5,105 @@ the results. Newest milestone first.
 
 ---
 
-## Milestone 6 — First NNUE evaluation (IN PROGRESS, 2026-05-30)
+## Milestone 6 — First NNUE evaluation (2026-05-30)
 
-### What this milestone is
+### Goal
 
-Until now the engine has judged positions with a hand-written formula (material
-plus piece-placement tables, "PeSTO"). Milestone 6 replaces that judgement with a
-small **neural network** — an *NNUE* ("efficiently updatable neural network"),
-the technique behind every modern top engine. The network learns, from millions
-of example positions, a far more accurate sense of who stands better. This is the
-single biggest expected strength jump of the project.
+Replace the engine's hand-written position judgement (material plus piece-square
+tables, "PeSTO") with a small **neural network** — an *NNUE* ("efficiently
+updatable neural network"), the evaluation technique behind every modern top
+engine. The network learns, from millions of example positions, a more accurate
+sense of who stands better. This milestone delivers the engine's **first trained
+network**, on by default, and proves on the scoreboard that it beats the
+hand-crafted evaluation it replaces.
 
-This milestone is **not finished yet.** What follows records exactly what is done
-and what remains, so it can be picked up cleanly.
+### What was done, and why
 
-### Done so far
-
-1. **The engine can run a network (the "inference" side).** The engine now
-   contains a complete NNUE evaluator built to the standard first-network design
-   (a two-sided "perspective" network with one hidden layer of 128 units). It is
-   switched on by pointing the engine's new `EvalFile` option at a trained
-   network file; with no file it keeps using PeSTO exactly as before, so the
-   engine remains a fully working Milestone-5-strength program. Careful automated
-   tests confirm the network maths is correct and that the fast incremental
-   bookkeeping (used while searching) always agrees with a from-scratch
+1. **An NNUE the engine can run.** The engine gained a complete NNUE evaluator of
+   the standard first-network design: a two-sided "perspective" network with one
+   hidden layer of 128 units (`(768 -> 128)x2 -> 1`), squared-clipped-ReLU
+   activation, and integer (quantized) arithmetic so it is fast and exactly
+   reproducible. Automated tests pin down the maths, the perspective symmetry, and
+   that the fast incremental bookkeeping always agrees with a from-scratch
    recompute.
 
-2. **The engine can generate its own training data.** A new `datagen` mode plays
-   the engine against itself very fast from varied openings and records, for each
-   suitable position, the engine's evaluation and the eventual game result — the
-   raw material a network learns from. A first dataset of **42,125,153 positions**
-   has been generated.
+2. **Self-play training data.** A `datagen` mode plays the engine against itself
+   very fast from varied openings and records, for each quiet position, the
+   engine's evaluation and the eventual game result. A first dataset of
+   **42,125,153 positions** was generated — labelled by the hand-crafted
+   evaluation, so the network is taught to imitate, then surpass, PeSTO.
 
-3. **A verification tool.** A new `eval` command prints the engine's network
-   evaluation for any position, so the engine's output can be checked, position by
-   position, against the training tool's own reference before any strength testing
-   is trusted.
+3. **The network was trained.** Using [bullet](https://github.com/jw1912/bullet)
+   (a standard GPU NNUE trainer) on a GTX 1660 SUPER, training took about **two
+   and a half minutes** — 40 passes over the data at ~12 million positions a
+   second. The trained net is small (193 KB) and is now **embedded in the engine
+   binary**, so `mindless` evaluates with the network by default, out of the box.
 
-### What remains (resume here)
+4. **The output was verified to the centipawn (the "eval-match").** Before
+   trusting a single game, the engine's evaluation was checked, position by
+   position, against an independent reference built from the trainer's own feature
+   mapping and inference code. It matched **exactly** on 18 varied positions (both
+   sides to move, openings through endgames). This is the guarantee that the
+   engine runs the network it was trained on — and the reason any strength result
+   can be believed.
 
-- **Install the GPU training toolkit (CUDA), then build the trainer.** The chosen
-  trainer is *bullet* (a standard, fast NNUE trainer). The graphics card is
-  present and working; only the CUDA *toolkit* still needs installing.
-- **Train the first network** on the generated data, then run the mandatory
-  "eval-match" check (engine output must equal the trainer's reference within
-  rounding) before trusting any game results.
-- **Prove it on the scoreboard:** the network engine must win an SPRT against the
-  Milestone-5 baseline. Only then is the milestone a success.
-- **Finalize:** measure the Elo gain, commit the trained network, tag
-  `baseline-m6`, and finish these docs.
+5. **It was proven on the scoreboard.** Against the Milestone-5 engine (the
+   hand-crafted evaluation) the network engine **passed an SPRT** and measured
+   clearly stronger.
 
-### Resume-critical details (for the next session)
+### Results
 
-- **Training data:** `tools/nnue/data/mindless-v1.txt` — ~2.5 GB, 42,125,153
-  positions, one per line as `FEN | score | result` (score in centipawns and
-  result as 1.0/0.5/0.0, both from White's view). This file is **deliberately not
-  committed** (it is gigabytes; regenerate with `mindless datagen` if lost).
-- **Network shape:** `(768 -> 128)x2 -> 1`, squared-clipped-ReLU activation;
-  plain 768 piece-square inputs (no king buckets), matching the bullet `simple`
-  example. The trainer **must** use this exact shape and the engine's
-  quantization (feature scale 255, output scale 64, evaluation scale 400) or the
-  eval-match check will fail.
-- **Trainer:** bullet (`github.com/jw1912/bullet`); needs the CUDA toolkit. Build
-  with `CUDA_PATH=/usr/local/cuda cargo build -r --features cuda`. Its data
-  converter (`bullet-utils`) does not need CUDA and already builds.
-- **No `baseline-m6` tag yet** — the milestone is incomplete; the current `main`
-  is a working PeSTO engine with the (inactive) NNUE machinery in place.
+- **Beats the hand-crafted evaluation.** Against `baseline-m5`:
+  - **SPRT: PASS** — **+46.2 ± 16.1 Elo** over 1,512 games (56.6%; the
+    log-likelihood ratio crossed its +2.94 acceptance bound).
+  - A separate fixed 600-game match measured **+41.3 ± 24.6 Elo** (55.9%). The two
+    independent measurements agree.
+- **Cumulative since the first playing baseline.** Against `baseline-m2`, a fixed
+  600-game match measured **+405.5 ± 45.4 Elo** (91.2%). (Elo is not additive
+  across such large gaps, so this is a fresh measurement, not Milestone 5's figure
+  plus the gain above.)
+- **Searches less deep, judges better.** From the start position in five seconds
+  the engine now reaches **depth 17**, down from 20 with PeSTO: the network costs
+  more to evaluate, so the search visits fewer positions — but its sharper
+  judgement more than pays for the lost depth. (The evaluator currently rebuilds
+  its accumulator from scratch at every leaf; wiring in the already-written
+  incremental update is the obvious next speed-up.)
+- **Rock-solid play.** 2,712 test games completed with zero illegal moves,
+  disconnects, or stalls.
+- **Quality checks clean:** optimized build, the full test suite (including a new
+  check that the embedded net is valid and that the engine defaults to it), the
+  linter (`-D warnings`), the formatter, and exhaustive perft all pass; move
+  generation remains perft-exact (~254 Mnps over the reference suite).
+
+### Key decisions, in brief
+
+- **Plain 768 inputs, not HalfKP/HalfKA.** The trainer's authors steer first nets
+  away from king-bucketed inputs (those need far more data); plain piece-square
+  inputs are the recommended match for a first network and a 42-million-position
+  dataset.
+- **The net is embedded and on by default.** A first NNUE that only switched on
+  via a manual option would leave the `baseline-m6` tag silently playing as PeSTO
+  in future tests. Embedding the net in the binary makes the tag *be* the network
+  engine — consistent with how every earlier baseline is a plain build. The
+  hand-crafted evaluation stays available as a runtime option (`EvalFile <none>`)
+  and as the library's dependency-free default.
+- **Eval-match before Elo, always.** No game result is trusted until the engine
+  reproduces the trainer's reference inference exactly. It matched on the first
+  try only because the inference was built to the trainer's contract from the
+  start — which is the whole point of having the check.
+- **Honest about the trade-off.** The network costs search depth (20 → 17) yet
+  still wins clearly. The ~+45 Elo gain is solid but modest for a first net; the
+  dataset size and the per-leaf full recompute are the obvious levers for more.
+- **Tagged the result** `baseline-m6`, the new reference point for future work.
+
+### What's next
+
+- **Make the network cheap to run:** keep the accumulator up to date incrementally
+  inside the search (the bookkeeping is already written and tested) rather than
+  recomputing it at every leaf — this should recover much of the lost depth and
+  turn it into Elo.
+- **More and better data:** a larger dataset, and self-play re-labelled by the
+  network itself, are the standard route to a substantially stronger second net.
 
 ---
 
