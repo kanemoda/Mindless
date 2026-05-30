@@ -5,6 +5,113 @@ the results. Newest milestone first.
 
 ---
 
+## Milestone 5 — Second strength batch: sharper searching (2026-05-30)
+
+### Goal
+
+Add the next wave of well-established search refinements, each measured on the
+same self-play scoreboard as Milestone 4, and keep only the ones that prove
+themselves. The theme this time is **judging captures and quiet moves before
+spending effort on them** — knowing, in advance, whether a capture wins or loses
+material, and which quiet moves are even worth a full look. As anticipated, the
+gains per technique were smaller than Milestone 4's, so each test needed more
+games to reach a confident verdict. The evaluation was left untouched on purpose
+(its neural-network replacement is a later milestone).
+
+### What was done, and why
+
+One new foundation plus five tested techniques, added and measured one at a time:
+
+0. **Static exchange evaluation (SEE) — the foundation.** Before any strength
+   change, the engine gained a fast, exact way to answer one question: "if I make
+   this capture and both sides trade pieces back and forth on that square, do I
+   come out ahead, even, or behind?" It assumes each side always recaptures with
+   its cheapest piece and stops once continuing would lose material, and it
+   correctly handles the tricky cases (pieces lined up behind one another,
+   promotions, the en-passant capture). This is pure machinery — on its own it
+   changes no decisions — but it underpins the techniques that follow. Its
+   correctness was pinned down with hand-checked test positions.
+
+1. **Smarter capture ordering and quiescence pruning (PASS).** Using SEE, the
+   engine now examines genuinely winning or even captures first and pushes
+   *losing* captures to the very back of the queue, behind the quiet moves. And
+   in the "let the dust settle" capture-only search, it simply skips captures
+   that SEE says lose material — there is no point following a doomed sacrifice.
+
+2. **Skipping bad moves in the main search (PASS).** Close to the end of a line,
+   the engine now declines captures that lose too much material and quiet moves
+   that walk a piece into being won — with the bar scaled by how far it still
+   intends to look.
+
+3. **Continuation history (PASS).** The engine already remembered which quiet
+   moves tended to be good. Now it also remembers good *follow-ups*: "after this
+   recent move, that reply of mine often works." It tracks this for the previous
+   one and two moves and folds it into both move ordering and how cautiously it
+   looks at late moves. It also now *penalises* moves that were tried and came up
+   short, not only rewards the ones that worked.
+
+4. **Singular extensions (tested, NOT kept).** This technique tries to detect
+   when one move is the *only* good move and, if so, looks at it more deeply. It
+   is a known and valuable idea — but at the very fast time control used for
+   testing it consistently made the engine *weaker* (about −20 Elo, and still
+   negative after a standard refinement). The reason: confirming a move is "the
+   only good one" needs an extra mini-search at many positions, and deepening
+   those moves costs roughly one level of overall look-ahead — a price that only
+   pays off at the deeper searches that longer time controls reach. It was left
+   out, with this finding recorded.
+
+5. **Late move pruning and history pruning (PASS).** Because moves are already
+   sorted best-first, once the engine has examined enough of them at a shallow
+   point in a line, the remaining quiet moves are very unlikely to be best — so
+   it stops looking at them. It also skips quiet moves with a poor track record
+   outright when very close to the end of a line. This was the single biggest win
+   of the milestone.
+
+### Results
+
+Each technique was measured against the best version that came before it:
+
+| Technique                         | Verdict | Elo gain      | Games | Score (W–L–D) |
+|-----------------------------------|:-------:|--------------:|------:|---------------|
+| SEE capture ordering + QS pruning |  PASS   | +24.9 ± 10.2  | 2148  | 695–541–912   |
+| SEE main-search pruning           |  PASS   | +34.8 ± 12.2  | 1572  | 531–374–667   |
+| Continuation history              |  PASS   | +31.1 ± 11.6  | 1746  | 563–407–776   |
+| Singular extensions               |  FAIL   | −20.2 ± 9.9   | 2278  | 561–693–1024  |
+| Late move + history pruning       |  PASS   | +55.6 ± 15.7  |  964  | 357–204–403   |
+
+- **Total strength gain this milestone:** over a fixed 2,000-game match, the
+  finished Milestone-5 engine measured **+129.8 ± 11.5 Elo** stronger than the
+  Milestone-4 engine — it scored 67.9% (990 wins, 276 losses, 734 draws).
+- **Cumulative since the first playing baseline:** over a 1,000-game match
+  against `baseline-m2` it now measures **+497.4 ± 36.4 Elo** stronger, winning
+  906 games, losing 14, and drawing 80 (94.6%).
+- **Sees deeper still.** From the start position in five seconds it now reaches
+  **depth 20**, up from **17** at the end of Milestone 4.
+- **Quality checks clean:** optimized build, the full automated test suite
+  (including nine new exact-value tests for the exchange evaluator), the linter,
+  and the formatter all pass; move generation remains perft-exact.
+
+### Key decisions, in brief
+
+- **Scoreboard-gated, one at a time.** Every technique earned its place — or
+  didn't — on the same self-play SPRT test against the best previous version.
+- **Reported the failure honestly.** Singular extensions did not help at this
+  time control; rather than force it in, it was measured, explained, and left
+  out. A non-result is still a result.
+- **Coupled changes tested as a unit** where natural — the continuation-history
+  work also modernised how move statistics age and added the "penalise moves that
+  failed" rule, since those only make sense together.
+- **Tagged the result** `baseline-m5`, the new reference point for future
+  progress.
+
+### What's next
+
+- The search is now strong and well-pruned. The major remaining item is the
+  **neural-network evaluation (NNUE)**, which will replace the current hand-made
+  position judgement through the swap-in interface built for it in Milestone 2.
+
+---
+
 ## Milestone 4 — First strength batch: smarter searching (2026-05-29)
 
 ### Goal

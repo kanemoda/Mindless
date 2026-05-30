@@ -316,6 +316,68 @@ check, mate scores stay exact, and move generation remains perfect.
 
 ---
 
+## Milestone 5 — judging moves before spending effort on them
+
+Milestone 4 taught the engine to look much further by skipping clearly
+unpromising branches. Milestone 5 sharpens that judgement, mostly around a single
+new tool: a fast, exact way to score an exchange of pieces on a square. As
+before, each idea was added on its own and kept only after winning measurably
+more self-play games, and the evaluation was left untouched.
+
+### The new tool — "static exchange evaluation"
+
+Before deciding whether a capture is worth looking at, it helps to know its
+outcome: if both sides keep capturing on that square with their cheapest
+available piece, does the side that started come out ahead? Mindless now answers
+this instantly and exactly, including awkward cases such as two rooks lined up
+behind one another, promotions, and the en-passant capture. On its own it changes
+nothing; it is the basis for the next two improvements.
+
+### Better capture handling
+
+Armed with the exchange score, the engine examines clearly good captures first
+and demotes losing captures below the quiet moves; and in its "wait for the
+position to calm down" capture search it skips losing captures entirely. In the
+main search, close to the end of a line, it also declines captures that lose too
+much material and quiet moves that simply hang a piece — with the threshold
+scaled by how much further it still plans to look.
+
+### Remembering good follow-ups — "continuation history"
+
+The engine already learned which quiet moves tend to work. Now it also learns
+good *sequences*: which reply tends to be good after a particular recent move.
+This memory — of the last one and two moves — steers move ordering and how boldly
+the engine skims past unlikely moves. It now also docks credit from moves that
+were tried and didn't work out, not only rewards the winners.
+
+### Trying fewer hopeless quiet moves
+
+Because moves are sorted best-first, the quiet moves examined late at a shallow
+point in a line are very unlikely to be best, so after a depth-dependent number
+of them the rest are skipped; and quiet moves with a poor track record are
+skipped outright near the end of a line. This was the single largest gain of the
+milestone.
+
+### One idea that didn't make the cut
+
+A technique called *singular extensions* — looking deeper when one move appears to
+be the only good one — was implemented and tested, but at the fast time control
+used for measurement it made the engine slightly weaker and was left out. It
+tends to pay off only at the deeper searches that longer time controls reach.
+Measuring a change and discarding it when it doesn't help is part of the
+discipline this project follows.
+
+### The payoff
+
+From the start position in five seconds the engine now looks about **20 moves
+deep**, up from 17 at the end of Milestone 4, and it is markedly stronger in
+head-to-head play. Every safeguard from before still holds: nothing is skipped
+while the king is in check, the best-ranked move is always examined in full,
+checkmates are still found and scored exactly, and move generation remains
+perfect.
+
+---
+
 ## How the project is organized
 
 The code is split into focused, well-named parts, each responsible for one idea:
@@ -334,10 +396,11 @@ project self-contained, portable, and easy to trust.
 
 ## What is deliberately *not* here yet
 
-- **The first wave of search shortcuts has now landed** (Milestone 4, above):
-  aspiration windows, reverse-futility pruning, null-move pruning, and late move
-  reductions. More refinements of the same kind will follow, each measured the
-  same way before being kept.
+- **Two waves of search refinements have now landed** (Milestones 4 and 5,
+  above): aspiration windows, reverse-futility pruning, null-move pruning and
+  late move reductions, followed by static-exchange-evaluation move ordering and
+  pruning, continuation history, and late-move / history pruning. The search is
+  now strong and well-pruned.
 - **No neural-network evaluation yet.** The current evaluation is a solid
   hand-made one; the much stronger NNUE network arrives in a later milestone and
   will slot into the interface already built for it.

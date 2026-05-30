@@ -7,11 +7,12 @@ Mindless is a single Rust crate that is **both** a runnable chess engine (the
 can run it) **and** a library (other Rust projects can depend on it to represent
 positions, generate moves, and search).
 
-> **Status — Milestone 2 (Baseline search + evaluation).** Mindless now *plays
-> chess*: it searches with alpha-beta, evaluates positions, manages its clock,
-> and reports its thinking over UCI. It is a clean, correct baseline — modern
-> pruning/reductions (null-move, LMR, futility) and NNUE evaluation are the
-> subject of later milestones. See [DEVLOG.md](DEVLOG.md) and
+> **Status — Milestone 5 (Second search batch).** Mindless is now a strong
+> searcher: on top of the Milestone-4 pruning it adds static-exchange-evaluation
+> move ordering and pruning, continuation history, and late-move / history
+> pruning — each validated by self-play SPRT. From the start position it searches
+> about **20 plies deep in five seconds**. The hand-crafted evaluation still
+> stands in for a future NNUE network. See [DEVLOG.md](DEVLOG.md) and
 > [ARCHITECTURE.md](ARCHITECTURE.md) for plain-language explanations.
 
 ## Features
@@ -42,6 +43,21 @@ positions, generate moves, and search).
 - **UCI `info`** output: depth, seldepth, score (cp/mate), nodes, nps, hashfull,
   time, and pv.
 - **Zero runtime dependencies** — pure safe Rust.
+
+**Search refinements (Milestones 4–5)**
+
+- **Aspiration windows**, **reverse-futility pruning**, **null-move pruning**,
+  and **late move reductions** (Milestone 4).
+- **Static exchange evaluation (SEE)**: winning/equal captures are ordered first
+  and losing captures are pruned in quiescence and (depth-scaled) in the main
+  search.
+- **Continuation history** (one and two plies back) alongside the main history,
+  with a penalty for quiet moves that fail to cut, feeding both move ordering and
+  late-move reductions.
+- **Late move pruning** and **history pruning** of unpromising quiet moves near
+  the leaves.
+- Every strength change is kept only after passing a self-play SPRT (a tested but
+  unhelpful idea — singular extensions — was measured and deliberately left out).
 
 ## Requirements
 
@@ -140,8 +156,9 @@ The public surface is intentionally small and stable: `Board`, `Move`,
 Example search output (release build, one development machine; figures vary by
 hardware):
 
-- **Start position**, 5 s: reaches depth 9, score ≈ +0.33, ~6.7 Mnps, PV
-  `e2e4 e7e6 g1f3 d7d5 e4d5 e6d5 f1e2 g8f6 e1g1`.
+- **Start position**, 5 s: reaches **depth 20** (with a deeper selective line) on
+  a development machine — up from depth 9 at the Milestone-2 baseline; figures
+  vary by hardware.
 - **Tactic** (`2rr3k/pp3pp1/1nnqbN1p/3pN3/2pP4/2P3Q1/PPB4P/R4RK1 w`): finds the
   winning `Qg6` and reports **mate in 2** essentially instantly.
 
@@ -171,9 +188,11 @@ to be kept.
 
 ## Roadmap
 
-- **Milestone 4:** modern pruning and reductions (null-move, LMR, futility,
-  SEE-based pruning), each validated with SPRT.
-- **Beyond:** NNUE evaluation, opening/endgame refinements, multithreaded search.
+- **Done (Milestones 4–5):** modern pruning and reductions (null-move, LMR,
+  reverse futility), then SEE-based ordering and pruning, continuation history,
+  and late-move / history pruning — all SPRT-validated.
+- **Next:** NNUE evaluation (slotting into the existing `Evaluator` interface),
+  then opening/endgame refinements and multithreaded search.
 
 ## License
 
