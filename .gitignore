@@ -6,3 +6,14 @@
 
 # fastchess tournament auto-save written to the repo root during a match
 /config.json
+
+# NNUE training data (gigabytes; regenerate with `mindless datagen`)
+/data
+/tools/nnue/data
+*.txt.part*
+
+# NNUE trainer build artifacts and bullet checkpoints.
+# The final trained net under tools/nnue/nets/ IS committed; these are not.
+/tools/nnue/trainer/target
+/tools/nnue/checkpoints
+*.bulletdata

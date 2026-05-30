@@ -12,9 +12,10 @@
 //! (null-move, late-move reductions, futility, ...) are intentionally deferred.
 
 use crate::board::Board;
-use crate::eval::{Evaluator, HandCrafted, PIECE_VALUE};
+use crate::eval::{Evaluator, PIECE_VALUE};
 use crate::movegen::{generate_legal, generate_noisy, legal_moves};
 use crate::moves::{Move, MoveList};
+use crate::nnue::Eval;
 use crate::see::see_ge;
 use crate::tt::{Bound, Tt};
 use crate::types::{Color, PieceType};
@@ -283,17 +284,37 @@ pub struct SearchResult {
 }
 
 /// Run a search synchronously (no thread, no `info` output) and return the
-/// result. Convenient for tests and embedding.
+/// result, using the hand-crafted evaluation. Convenient for tests and
+/// embedding; use [`search_sync_with`] to choose the evaluator.
 pub fn search_sync(board: &Board, history: &[u64], limits: SearchLimits) -> SearchResult {
+    search_sync_with(board, history, limits, Eval::hand())
+}
+
+/// Like [`search_sync`] but with an explicit evaluator.
+pub fn search_sync_with(
+    board: &Board,
+    history: &[u64],
+    limits: SearchLimits,
+    eval: Eval,
+) -> SearchResult {
     let tt = Arc::new(Tt::new(16));
     let stop = Arc::new(AtomicBool::new(false));
-    let mut searcher = Box::new(Searcher::new(
-        HandCrafted::new(),
-        tt,
-        stop,
-        limits,
-        history.to_vec(),
-    ));
+    search_sync_tt(board, history, limits, eval, tt, stop)
+}
+
+/// Like [`search_sync_with`] but reuses a caller-owned transposition table and
+/// stop flag. Intended for data generation, where allocating a fresh table per
+/// move would dominate the cost; the caller clears the table between games and
+/// the search ages it each call via [`Tt::new_search`].
+pub fn search_sync_tt(
+    board: &Board,
+    history: &[u64],
+    limits: SearchLimits,
+    eval: Eval,
+    tt: Arc<Tt>,
+    stop: Arc<AtomicBool>,
+) -> SearchResult {
+    let mut searcher = Box::new(Searcher::new(eval, tt, stop, limits, history.to_vec()));
     let mut board = board.clone();
     let best = searcher.run_quiet(&mut board);
     SearchResult {
@@ -304,7 +325,8 @@ pub fn search_sync(board: &Board, history: &[u64], limits: SearchLimits) -> Sear
     }
 }
 
-/// Run a search and return the best move, printing `info` lines as it deepens.
+/// Run a search and return the best move, printing `info` lines as it deepens,
+/// using the given evaluator.
 ///
 /// Intended to be called on a dedicated thread. `history` holds the Zobrist keys
 /// of the game so far (ending with the root position) for repetition detection.
@@ -314,8 +336,9 @@ pub fn think(
     tt: Arc<Tt>,
     stop: Arc<AtomicBool>,
     limits: SearchLimits,
+    eval: Eval,
 ) -> Move {
-    let mut searcher = Box::new(Searcher::new(HandCrafted::new(), tt, stop, limits, history));
+    let mut searcher = Box::new(Searcher::new(eval, tt, stop, limits, history));
     let mut board = board;
     searcher.run(&mut board)
 }

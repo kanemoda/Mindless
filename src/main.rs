@@ -22,9 +22,61 @@ fn main() {
             run_bench(depth_override);
         }
         Some("perft") => run_perft_cli(&args[2..]),
+        Some("datagen") => mindless::datagen::run(&args[2..]),
+        Some("eval") => run_eval(&args[2..]),
         Some("--version") | Some("-V") => println!("Mindless {VERSION}"),
         Some("--help") | Some("-h") => print_help(),
         _ => uci::run(),
+    }
+}
+
+/// `mindless eval <net.bin> "<FEN>"` — print the engine's static NNUE evaluation
+/// (side-to-move-relative centipawns) for a position. Used to verify, position by
+/// position, that the engine reproduces the trainer's reference eval after a net
+/// is loaded. With no FEN it reads FENs from stdin, one per line.
+fn run_eval(args: &[String]) {
+    mindless::magic::init();
+    let Some(net_path) = args.first() else {
+        eprintln!(
+            "usage: mindless eval <net.bin> [\"<FEN>\"]   (FEN omitted ⇒ read FENs from stdin)"
+        );
+        return;
+    };
+    let bytes = match std::fs::read(net_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("could not read net {net_path}: {e}");
+            return;
+        }
+    };
+    let Some(nnue) = mindless::nnue::Nnue::from_bytes(&bytes) else {
+        eprintln!(
+            "net {net_path} has wrong size ({} bytes; expected {} or its 64-byte-padded size)",
+            bytes.len(),
+            mindless::nnue::NETWORK_BYTES
+        );
+        return;
+    };
+    use mindless::eval::Evaluator;
+
+    let eval_fen = |fen: &str| match Board::from_fen(fen.trim()) {
+        Ok(board) => println!("{} | {}", fen.trim(), nnue.evaluate(&board)),
+        Err(e) => eprintln!("invalid FEN '{}': {e}", fen.trim()),
+    };
+
+    if args.len() > 1 {
+        eval_fen(&args[1..].join(" "));
+    } else {
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        let mut handle = stdin.lock();
+        let mut buf = String::new();
+        while handle.read_line(&mut buf).unwrap_or(0) > 0 {
+            if !buf.trim().is_empty() {
+                eval_fen(&buf);
+            }
+            buf.clear();
+        }
     }
 }
 
@@ -35,6 +87,8 @@ fn print_help() {
     println!("  mindless                     Start the UCI engine (default)");
     println!("  mindless perft <depth> [FEN] Perft divide for a position");
     println!("  mindless bench [depth]       Run the perft reference suite");
+    println!("  mindless datagen [opts]      Generate self-play NNUE training data");
+    println!("  mindless eval <net> [FEN]    Print the static NNUE eval of a position");
     println!("  mindless --version           Print the version");
 }
 

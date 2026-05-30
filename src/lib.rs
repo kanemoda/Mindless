@@ -37,10 +37,12 @@
 pub mod attacks;
 pub mod bitboard;
 pub mod board;
+pub mod datagen;
 pub mod eval;
 pub mod magic;
 pub mod movegen;
 pub mod moves;
+pub mod nnue;
 pub mod perft;
 pub mod search;
 pub mod see;

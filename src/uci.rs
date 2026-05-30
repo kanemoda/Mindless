@@ -7,6 +7,7 @@
 use crate::board::Board;
 use crate::movegen::legal_moves;
 use crate::moves::Move;
+use crate::nnue::{Eval, Nnue};
 use crate::perft::perft_divide;
 use crate::search::{self, SearchLimits};
 use crate::tt::Tt;
@@ -33,6 +34,8 @@ struct Engine {
     stop: Arc<AtomicBool>,
     search: Option<JoinHandle<()>>,
     hash_mb: usize,
+    /// The active evaluator (hand-crafted by default; NNUE once a net is loaded).
+    eval: Eval,
 }
 
 impl Engine {
@@ -46,6 +49,7 @@ impl Engine {
             stop: Arc::new(AtomicBool::new(false)),
             search: None,
             hash_mb: DEFAULT_HASH_MB,
+            eval: Eval::hand(),
         }
     }
 
@@ -125,6 +129,10 @@ fn print_id() {
     println!("option name Hash type spin default {DEFAULT_HASH_MB} min 1 max {MAX_HASH_MB}");
     println!("option name Threads type spin default 1 min 1 max 1");
     println!("option name Clear Hash type button");
+    // Path to an NNUE network file (bullet `quantised.bin`). Empty (the default)
+    // keeps the hand-crafted PeSTO evaluation. Setting it to "<empty>" or
+    // clearing it reverts to PeSTO.
+    println!("option name EvalFile type string default <empty>");
     println!("uciok");
 }
 
@@ -158,9 +166,49 @@ fn handle_setoption(engine: &mut Engine, tokens: &[&str]) {
             engine.stop_search();
             engine.tt.clear();
         }
+        "EvalFile" => {
+            engine.stop_search();
+            set_eval_file(engine, &value);
+        }
         // Accepted for compatibility; the search is single-threaded for now.
         "Threads" => {}
         _ => {}
+    }
+}
+
+/// Load an NNUE network from `path` and make it the active evaluator, or revert
+/// to the hand-crafted evaluation when `path` is empty / a clear sentinel. On a
+/// load failure the previous evaluator is kept and the reason is reported via an
+/// `info string` (UCI's channel for human-readable messages).
+fn set_eval_file(engine: &mut Engine, path: &str) {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed == "<empty>" || trimmed == "<default>" {
+        engine.eval = Eval::hand();
+        println!("info string EvalFile cleared; using hand-crafted (PeSTO) evaluation");
+        return;
+    }
+    match std::fs::read(trimmed) {
+        Ok(bytes) => match Nnue::from_bytes(&bytes) {
+            Some(nnue) => {
+                engine.eval = Eval::Net(nnue);
+                println!("info string loaded NNUE network from {trimmed}");
+            }
+            None => {
+                println!(
+                    "info string EvalFile {trimmed} has wrong size ({} bytes, expected {}); \
+                     keeping {}",
+                    bytes.len(),
+                    crate::nnue::NETWORK_BYTES,
+                    engine.eval.name()
+                );
+            }
+        },
+        Err(e) => {
+            println!(
+                "info string could not read EvalFile {trimmed}: {e}; keeping {}",
+                engine.eval.name()
+            );
+        }
     }
 }
 
@@ -241,11 +289,12 @@ fn handle_go(engine: &mut Engine, tokens: &[&str]) {
     let history = engine.history.clone();
     let tt = Arc::clone(&engine.tt);
     let stop = Arc::clone(&engine.stop);
+    let eval = engine.eval.clone();
 
     let handle = thread::Builder::new()
         .stack_size(SEARCH_STACK)
         .spawn(move || {
-            let best = search::think(board, history, tt, stop, limits);
+            let best = search::think(board, history, tt, stop, limits, eval);
             let mv = if best.is_null() {
                 "0000".to_string()
             } else {
